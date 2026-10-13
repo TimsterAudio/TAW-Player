@@ -1,0 +1,33 @@
+[package]
+name = "taw-player"
+version = "0.1.0"
+edition = "2021"
+description = "Timster's Audio Works Player (PL-001): a native, gapless music player for Windows and Linux"
+authors = ["Timster's Audio Works"]
+publish = false
+
+[dependencies]
+# 0.2.0, with the spectrum drawing and the analyser
+taw-panel = { git = "https://github.com/TimsterAudio/TAW-Panel", rev = "41a95d4513d93dfbf18803508065a8c0a168ec95", features = ["analyser"] }
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "persistence", "wayland", "x11"] }
+egui = "0.36"
+cpal = "0.18"
+rtrb = "0.4"
+symphonia = { version = "0.5.4", features = ["all-codecs", "all-formats"] }
+rubato = "0.16"
+lofty = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { version = "0.18", features = ["pipewire"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev.package."*"]
+opt-level = 2
