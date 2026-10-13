@@ -996,7 +996,7 @@ impl PlayerApp {
         // What the file is, and what's being done to it.
         if let Some((i, _, m)) = &np {
             let mut x = rect.left();
-            x += chip(p, Pos2::new(x, y + 8.0), &m.info.codec, th.legend, true) + 6.0;
+            x += chip(p, Pos2::new(x, y + 8.0), &m.info.codec, STRIPE[3], true) + 6.0;
             let mut fmt = String::new();
             // ALAC in M4A only gives its bit depth in the file's header.
             let bits = m.info.bits.or_else(|| {
