@@ -18,6 +18,7 @@ pub struct Tags {
     pub album: Option<String>,
     pub track_no: Option<u32>,
     pub seconds: Option<f64>,
+    pub bits: Option<u8>,
 }
 
 fn clean(s: Option<std::borrow::Cow<'_, str>>) -> Option<String> {
@@ -34,6 +35,7 @@ pub fn read(path: &Path) -> Tags {
     let secs = file.properties().duration().as_secs_f64();
     let mut t = Tags {
         seconds: (secs > 0.0).then_some(secs),
+        bits: file.properties().bit_depth(),
         ..Default::default()
     };
     let mut tags: Vec<&Tag> = file.primary_tag().into_iter().collect();
