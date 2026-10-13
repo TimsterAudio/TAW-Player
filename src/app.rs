@@ -923,7 +923,7 @@ impl PlayerApp {
             .filter(|&i| i < self.rows.len());
 
         // Artwork.
-        let size = (rect.height() - 330.0).clamp(160.0, LEFT_W);
+        let size = (rect.height() - 372.0).clamp(160.0, LEFT_W);
         let art = Rect::from_min_size(rect.min, Vec2::splat(size));
         well(ui.painter(), art, th);
         let tex = current.and_then(|i| {
@@ -1037,6 +1037,10 @@ impl PlayerApp {
             );
         }
         y += 48.0;
+        // The output row sits on the bottom edge; position and meters
+        // above it.
+        let row_top = rect.bottom() - 64.0;
+        y = y.max(row_top - 146.0);
 
         // Position.
         self.position_bar(
@@ -1078,10 +1082,8 @@ impl PlayerApp {
                 0.0,
             );
         }
-        y += 52.0;
 
         // Output: volume, device, spectrum and panel.
-        let row_top = y.min(rect.bottom() - 64.0);
         let kc = Pos2::new(rect.left() + 24.0, row_top + 24.0);
         let before = self.s.volume_db;
         knob(
@@ -1471,7 +1473,11 @@ impl PlayerApp {
             Some(o) => format!(
                 "{} · {} · {} · {} ch · {}",
                 o.host,
-                o.device,
+                if o.device.starts_with("default") {
+                    "System default"
+                } else {
+                    &o.device
+                },
                 rate_label(o.rate),
                 o.channels,
                 o.format

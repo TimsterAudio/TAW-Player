@@ -611,7 +611,6 @@ impl Player {
             resampled: self.conv.as_ref().map(|c| c.resampling()).unwrap_or(false),
         });
         self.src = Some((i, s));
-        self.shared.feeding.store(true, Relaxed);
         self.status_dirty = true;
     }
 
@@ -697,6 +696,8 @@ impl Player {
                             c.finish(&mut self.pending);
                         }
                         self.switch_to = Some((n, s, rate));
+                        // Running dry before the reopen is on purpose.
+                        self.shared.feeding.store(false, Relaxed);
                     }
                     return;
                 }
@@ -729,6 +730,10 @@ impl Player {
                 chunk.commit_all();
                 self.pending_pos += n;
                 self.written += (n / ch) as u64;
+                // Only now can running short count as a dropout.
+                if self.switch_to.is_none() {
+                    self.shared.feeding.store(true, Relaxed);
+                }
             }
         }
         self.pending_pos >= self.pending.len()

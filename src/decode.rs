@@ -42,6 +42,8 @@ pub struct Source {
     buf: Option<SampleBuffer<f32>>,
     /// Channels in the last block (a file can change, rarely).
     pub block_channels: usize,
+    /// A block decoded while opening, still to be handed out.
+    primed: bool,
 }
 
 fn codec_label(codec: symphonia::core::codecs::CodecType, path: &Path) -> String {
@@ -115,31 +117,49 @@ impl Source {
             frames: params.n_frames,
         };
         let track_id = track.id;
+        let info_channels = info.channels;
         let mut s = Source {
             format,
             decoder,
             track_id,
             info,
             buf: None,
-            block_channels: 0,
+            block_channels: info_channels,
+            primed: false,
         };
-        // Some files only say their rate and channels once decoding starts.
+        // Some files (AAC and ALAC in M4A) only say their rate and channels
+        // once decoding starts: decode the first block now and keep it.
         if s.info.rate == 0 || s.info.channels == 0 {
-            return Err("the file doesn't say its sample rate".into());
+            match s.decode_next() {
+                Some(rate) if rate > 0 => {
+                    s.info.rate = rate;
+                    s.info.channels = s.block_channels;
+                    s.primed = true;
+                }
+                _ => return Err("the file doesn't say its sample rate".into()),
+            }
         }
-        s.block_channels = s.info.channels;
         Ok(s)
     }
 
-    /// The next block of interleaved samples, or None at the end of the
-    /// file. Damaged packets are skipped rather than stopping playback.
+    /// The next block of interleaved samples and its channel count, or None
+    /// at the end of the file.
     pub fn next_block(&mut self) -> Option<(&[f32], usize)> {
+        if !std::mem::take(&mut self.primed) {
+            self.decode_next()?;
+        }
+        let ch = self.block_channels;
+        self.buf.as_ref().map(|b| (b.samples(), ch))
+    }
+
+    /// Decodes the next packet into `buf`; returns its sample rate.
+    /// Damaged packets are skipped rather than stopping playback.
+    fn decode_next(&mut self) -> Option<u32> {
         let mut errors = 0;
         loop {
             let packet = match self.format.next_packet() {
                 Ok(p) => p,
-                Err(Error::ResetRequired) => return None,
-                Err(_) => return None, // end of stream, or unreadable
+                Err(_) => return None, // the end, or unreadable from here
             };
             if packet.track_id() != self.track_id {
                 continue;
@@ -147,8 +167,7 @@ impl Source {
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
                     let spec = *decoded.spec();
-                    let frames = decoded.frames();
-                    if frames == 0 {
+                    if decoded.frames() == 0 {
                         continue;
                     }
                     let need = decoded.capacity() as u64;
@@ -161,9 +180,8 @@ impl Source {
                         self.buf = Some(SampleBuffer::new(need, spec));
                     }
                     self.block_channels = spec.channels.count();
-                    let buf = self.buf.as_mut()?;
-                    buf.copy_interleaved_ref(decoded);
-                    return Some((buf.samples(), self.block_channels));
+                    self.buf.as_mut()?.copy_interleaved_ref(decoded);
+                    return Some(spec.rate);
                 }
                 Err(Error::DecodeError(_)) | Err(Error::IoError(_)) => {
                     errors += 1;
@@ -188,6 +206,7 @@ impl Source {
             .seek(SeekMode::Accurate, to)
             .map_err(|e| e.to_string())?;
         self.decoder.reset();
+        self.primed = false;
         Ok(r.actual_ts as f64 / self.info.rate.max(1) as f64)
     }
 }
@@ -259,5 +278,47 @@ pub mod tests {
         let at = s.seek(0.5).unwrap();
         assert!((at - 0.5).abs() < 0.01, "{at}");
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod fixtures {
+    use super::*;
+
+    /// Decodes every track `tools/make-test-tracks.sh` made.
+    /// `cargo test -- --ignored fixtures` after running the script.
+    #[test]
+    #[ignore]
+    fn fixtures_decode() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/fixtures");
+        let mut failed = Vec::new();
+        for dir in std::fs::read_dir(&root)
+            .expect("run tools/make-test-tracks.sh")
+            .flatten()
+        {
+            for f in std::fs::read_dir(dir.path()).unwrap().flatten() {
+                let p = f.path();
+                if !crate::playlist::is_audio(&p) {
+                    continue;
+                }
+                match Source::open(&p) {
+                    Ok(mut s) => {
+                        let mut n = 0;
+                        while let Some((b, ch)) = s.next_block() {
+                            n += b.len() / ch;
+                        }
+                        println!("{:?}: {:?}, {n} frames", p.file_name().unwrap(), s.info);
+                        if n == 0 {
+                            failed.push(p);
+                        }
+                    }
+                    Err(e) => {
+                        println!("{:?}: {e}", p.file_name().unwrap());
+                        failed.push(p);
+                    }
+                }
+            }
+        }
+        assert!(failed.is_empty(), "{failed:?}");
     }
 }
