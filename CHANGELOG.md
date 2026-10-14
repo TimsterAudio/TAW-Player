@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-The Player's first build (PL-001): the native successor to Spool.
+## 0.1.0 – 2026-10-14
+
+The Player's first release (PL-001): the native successor to Spool, in the family's TAW look.
 
 - Plays folders (with sub-folders, in name order), files and M3U/M3U8 playlists, opened from the panel, dropped on the window, or given on the command line (`taw-player --play …`).
 - FLAC, MP3, WAV, AIFF, ALAC and AAC (M4A) and Ogg Vorbis, decoded with symphonia.
