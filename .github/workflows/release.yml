@@ -129,7 +129,7 @@ jobs:
           - **Linux** (`…-linux-x86_64.tar.gz`): extract it and run `./taw-player`.
           - **Windows** (`…-windows-x86_64.zip`): extract it and run `taw-player.exe`.
 
-          The Player works on its own. With the Library it plays what you choose there; with the Equaliser and Analyser installed, its Family keys start them.
+          The Player works on its own. With the Library it plays what you choose there; with the Equaliser and Analyser installed, its family switcher starts them.
           EOF
           cat notes.md
       - name: Create the release, or attach to the existing one
