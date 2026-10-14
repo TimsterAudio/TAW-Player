@@ -498,6 +498,9 @@ impl Player {
 
     /// Empties the ring and everything waiting for it.
     fn flush(&mut self) {
+        // Emptying the ring on purpose (a jump, a seek, Stop) isn't a
+        // dropout; counting starts again once new audio is written.
+        self.shared.feeding.store(false, Relaxed);
         self.pending.clear();
         self.pending_pos = 0;
         if self.out.is_some() {

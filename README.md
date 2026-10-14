@@ -1,6 +1,6 @@
 # TAW Player
 
-**Timster's Audio Works – Player (PL-001) v0.1.0**: a native, gapless music player for Windows and Linux, with the same panel as the Library, Equaliser and Analyser. It's the native successor to Spool.
+**Timster's Audio Works – Player (PL-001) v0.1.0**: a native, gapless music player for Windows and Linux, in the TAW look shared with the Library, Equaliser and Analyser (Spool or Porcelain, light or dark). It's the native successor to Spool.
 
 ![The Player playing a test album](docs/screenshot.png)
 
@@ -12,11 +12,12 @@ It's a desktop program written in Rust (egui for the panel). It isn't an HTML pa
 
 - **Plays folders, files and playlists.** Open a folder (with its sub-folders, in name order, so CD1 comes before CD2), pick files, open an M3U or M3U8 playlist, or drop any of them on the window. FLAC, MP3, WAV, AIFF, ALAC and AAC (M4A) and Ogg Vorbis.
 - **Gapless.** The next track is decoded straight on from the last into one continuous stream, so tracks at the same sample rate join with no gap. MP3s with a LAME header have the encoder's delay and padding trimmed, as Spool did. Tested with sine waves cut into tracks at exact sample positions: the joins are seamless and the length is exact.
-- **Each track at its own sample rate, where the output allows it**, and it says plainly when it doesn't. Under the track a green light reads *Native rate: 44.1 kHz out*; an amber one reads *Resampled to 48 kHz for this output* when the output can't take the track's rate. A change of rate between albums reopens the output at the new rate (a short pause between them, not a resample).
+- **Each track at its own sample rate, where the output allows it**, and it says plainly when it doesn't. Under the track a green light reads *Playing as recorded* (Simple) or *Native rate, untouched* (Detailed); an amber one reads *converted for this output* or *Resampled to 48 kHz for this output* when the output can't take the track's rate. A change of rate between albums reopens the output at the new rate (a short pause between them, not a resample).
 - **No false bit-perfect claims.** The Player can only speak for its own part of the path: at 0 dB volume and the native rate it passes the samples on untouched. What the system does after that is the system's business; see [Sample rates and "bit-perfect"](#sample-rates-and-bit-perfect).
 - **Tags and artwork**: title, artist and album from the file's tags (or its name), and the cover from a `cover`, `front`, `folder` or `album` JPEG or PNG in the track's folder (or a parent, up to the folder you opened), or the picture in the file.
-- **LED meters and a spectrum**, from the family's shared panel. The spectrum can be switched off.
-- **Black or Silver panel**, volume, output device and the rest remembered between runs.
+- **Simple and Detailed.** Simple shows the artwork, the track, the list and the transport, and says what's playing in plain words. Detailed adds the display window (time, LED meters and a spectrum) and the exact format, rate and output.
+- **The TAW look**: Spool's warm panels by default (Light, Amber), tinted by any of Spool's seven colour themes, or Porcelain; light, dark or following the computer. The Player draws its own title strip and window buttons; Settings can bring back the system's title bar.
+- Volume, output device, look and the rest remembered between runs.
 
 ### Keys
 
@@ -36,7 +37,7 @@ It's a desktop program written in Rust (egui for the panel). It isn't an HTML pa
 The Player needs nothing else. With the others installed:
 
 - **From the Library:** its Play key hands the album to the Player (`taw-player --play album.m3u8`). If the Player is already open it takes the album and the second launch closes; if the Player can't be found, the Library uses the default music player as before.
-- **Family keys** start the Library, the Equaliser and the Analyser. The LED over each key is lit when that app was found: next to the Player, in a folder beside the Player's (two unzipped downloads side by side), in `Program Files\Timster's Audio Works\<App>` or `%LOCALAPPDATA%\Programs\Timster's Audio Works\<App>` on Windows, or on the PATH. If it isn't found, the Player says so; press the key again to show it where the app is, and it remembers.
+- **The family switcher** along the top starts the Library, the Equaliser and the Analyser. An app that wasn't found is dimmed. The Player looks next to the Player, in a folder beside the Player's (two unzipped downloads side by side), in `Program Files\Timster's Audio Works\<App>` or `%LOCALAPPDATA%\Programs\Timster's Audio Works\<App>` on Windows, or on the PATH. If it isn't found, the Player says so; click it again to show the Player where the app is, and it remembers.
 
 From a terminal or another program:
 
@@ -59,7 +60,7 @@ The Player decodes every file at its own rate and never resamples unless it has 
 - No hardware media keys or system media controls yet.
 - No CUE sheets, no playlist editing (reorder, remove), no saving playlists, no "add to the list"; opening replaces the list.
 - Multichannel files are played as their first two channels on a stereo output (no downmix).
-- No VU meters or Retro look (Spool's), no colour themes.
+- No VU meters or Retro look (Spool's) yet.
 
 See [ROADMAP.md](ROADMAP.md) for the full list against Spool.
 

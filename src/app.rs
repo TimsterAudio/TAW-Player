@@ -1,39 +1,42 @@
-//! The Player's panel: transport and the display along the top, the
-//! playing track (artwork, tags, what the signal path is doing, position
-//! and meters) on the left, and the playlist on the right.
+//! The Player's panel, in the TAW look: the nameplate and family switcher
+//! along the top, the playing track (artwork, tags, what the signal path is
+//! doing) on the left, the display (time, meters, spectrum) and the playlist
+//! on the right, and the transport along the bottom like a front panel.
 
 use crate::engine::{locate, Cmd, Engine, Mark, OutputInfo};
 use crate::family::{self, App};
 use crate::instance::{self, Beacon};
 use crate::playlist::{self, Entry};
 use crate::tags::{self, ArtLoader, TagReader, Tags};
-use egui::text::{LayoutJob, TextFormat};
 use egui::{
-    Align2, Color32, CornerRadius, Id, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
+    Align2, Color32, CornerRadius, CursorIcon, Id, Key, Pos2, Rect, Response, Sense, Shape, Stroke,
+    StrokeKind, Ui, Vec2, ViewportCommand,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use taw_panel::analyzer::{Analyzer, Ballistics};
-use taw_panel::frame::{draw_panel_bg, fit_to_window};
-use taw_panel::lists::{self, chip, fit, light, well, Light};
-use taw_panel::spectrum::{self, Look, Scheme};
-use taw_panel::theme::*;
-use taw_panel::widgets::*;
+use taw_panel::hifi::{self, Tokens};
+use taw_panel::lists;
+use taw_panel::theme::PanelKind;
+use taw_panel::widgets::Spec;
 
 const STORAGE_KEY: &str = "taw-player";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// The panel's design size; smaller windows scale it down.
-const DESIGN: Vec2 = Vec2::new(1560.0, 880.0);
-pub const DEFAULT_SIZE: Vec2 = Vec2::new(1440.0, 812.0);
-const TOP_ROW: f32 = 136.0;
-const LEFT_W: f32 = 440.0;
-const ROW_H: f32 = 26.0;
+pub const DEFAULT_SIZE: Vec2 = Vec2::new(1280.0, 800.0);
+/// Below this size the panel scales down; above it the list gets the room.
+const MIN_DESIGN: Vec2 = Vec2::new(1180.0, 720.0);
+const PLATE_H: f32 = 96.0;
+const BAR_H: f32 = 96.0;
+const DISPLAY_H: f32 = 112.0;
+const ROW_H: f32 = 30.0;
 
 /// Everything remembered between runs.
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct Saved {
+    /// The Jupiter panel before the TAW look. Kept so older settings load.
+    #[allow(dead_code)]
     panel: PanelKind,
     /// Volume in dB; 0 leaves the samples untouched.
     volume_db: f32,
@@ -47,6 +50,12 @@ struct Saved {
     last_dir: Option<PathBuf>,
     /// Where the user pointed the Player to family apps it couldn't find.
     family: HashMap<String, PathBuf>,
+    /// Finish, light or dark, and accent.
+    finish: hifi::Look,
+    /// Simple view: no display window and no numbers; the list gets the room.
+    simple: bool,
+    /// Use the system's title bar instead of the Player's own.
+    system_title_bar: bool,
 }
 
 impl Default for Saved {
@@ -60,6 +69,9 @@ impl Default for Saved {
             remain: false,
             last_dir: None,
             family: HashMap::new(),
+            finish: hifi::Look::default(),
+            simple: false,
+            system_title_bar: false,
         }
     }
 }
@@ -171,6 +183,7 @@ pub struct PlayerApp {
     /// A family key pressed when its app wasn't found; pressed again soon,
     /// it asks where the app is.
     locate: Option<(App, f64)>,
+    settings_open: bool,
 }
 
 fn now(ui: &Ui) -> f64 {
@@ -206,7 +219,7 @@ fn db_to_gain(db: f32) -> f32 {
 
 impl PlayerApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Vec<PathBuf>) -> Self {
-        install_fonts(&cc.egui_ctx);
+        hifi::install_fonts(&cc.egui_ctx);
         let s: Saved = cc
             .storage
             .and_then(|st| eframe::get_value(st, STORAGE_KEY))
@@ -248,7 +261,12 @@ impl PlayerApp {
             seeking: None,
             found: HashMap::new(),
             locate: None,
+            settings_open: false,
         };
+        if app.s.system_title_bar {
+            cc.egui_ctx
+                .send_viewport_cmd(ViewportCommand::Decorations(true));
+        }
         app.refresh_family();
         if !open.is_empty() {
             app.load(&open, true, 0.0);
@@ -480,10 +498,9 @@ impl PlayerApp {
                     self.locate = Some((a, t));
                     self.tell(
                         format!(
-                            "The {} isn't installed here: there's no {} next to the Player or on the PATH. Press {} again to show the Player where it is.",
+                            "The {} isn't installed here (no {} next to the Player or on the PATH). Click it again to show the Player where it is.",
                             a.name(),
                             family::exe_name(a.program()),
-                            key_label(a)
                         ),
                         t,
                     );
@@ -623,298 +640,173 @@ impl PlayerApp {
         }
     }
 
-    // ------------------------------------------------------------ top strip
+    // ------------------------------------------------------------ what's playing, in words
 
-    fn top_strip(&mut self, ui: &mut Ui, panel: Rect, th: &Theme) {
-        let o = panel.min.to_vec2();
-        let at = |x: f32, y: f32| Pos2::new(x, y) + o;
-        let t = now(ui);
-
-        // Maker wordmark, logo and model line.
-        {
-            let p = ui.painter();
-            let mut job = LayoutJob::default();
-            job.append(
-                "Timster's Audio Works - ",
-                0.0,
-                TextFormat {
-                    font_id: font(F_MAKER, 13.0),
-                    color: th.legend_dim,
-                    ..Default::default()
-                },
-            );
-            job.append(
-                "Player",
-                0.0,
-                TextFormat {
-                    font_id: font(F_MAKER_BOLD, 13.0),
-                    color: th.legend,
-                    ..Default::default()
-                },
-            );
-            let g = p.layout_job(job);
-            let r = Rect::from_min_size(at(22.0, 14.0), g.size() + Vec2::new(20.0, 10.0));
-            p.rect_stroke(
-                r,
-                CornerRadius::same(3),
-                Stroke::new(1.0, th.frame),
-                StrokeKind::Inside,
-            );
-            p.galley(r.min + Vec2::new(10.0, 5.0), g, th.legend);
+    /// The track's format: the codec, then bit depth, rate and channels.
+    fn format_chips(&self, i: usize, m: &Mark) -> (String, String) {
+        let mut fmt = String::new();
+        // ALAC in M4A only gives its bit depth in the file's header.
+        let bits = m.info.bits.or_else(|| {
+            (m.info.codec == "ALAC")
+                .then(|| self.rows.get(i).and_then(|r| r.tags.as_ref()?.bits))
+                .flatten()
+                .map(u32::from)
+        });
+        if let Some(b) = bits {
+            fmt += &format!("{b}-bit · ");
         }
-        slanted_text(
-            ui,
-            at(24.0, 50.0),
-            "PLAYER",
-            font(F_LOGO, 30.0),
-            th.legend,
-            3.0,
-            12.0,
-        );
-        text(
-            ui.painter(),
-            at(22.0, 92.0),
-            Align2::LEFT_TOP,
-            &format!("PL-001 · MUSIC PLAYER · V{VERSION}"),
-            font(F_LEGEND, 10.0),
-            th.legend_dim,
-            2.4,
-        );
-
-        // The display.
-        let lcd_rect = Rect::from_min_size(at(262.0, 26.0), Vec2::new(400.0, 52.0));
-        let np = self.now_playing().map(|(i, secs, m)| (i, secs, m.clone()));
-        let lines = match &np {
-            Some((i, secs, m)) => {
-                let row = &self.rows.get(*i);
-                let title = row.map(|r| r.title()).unwrap_or_default();
-                let len = m.info.seconds().or_else(|| row.and_then(|r| r.seconds()));
-                let secs = match self.seeking {
-                    Some(f) => len.map(|l| f as f64 * l).unwrap_or(*secs),
-                    None => *secs,
-                };
-                let time = match (self.s.remain, len) {
-                    (true, Some(l)) => format!("-{}", time_label(l - secs)),
-                    _ => time_label(secs),
-                };
-                let mut file = m.info.codec.clone();
-                if let Some(b) = m.info.bits {
-                    file += &format!(" {b}/");
-                } else {
-                    file += " ";
-                }
-                file += &rate_label(m.info.rate).replace(" kHz", "");
-                let who = row
-                    .map(|r| {
-                        let (a, al) = (r.artist(), r.album());
-                        match (a.is_empty(), al.is_empty()) {
-                            (false, false) => format!("{a} - {al}"),
-                            (false, true) => a,
-                            (true, false) => al,
-                            _ => String::new(),
-                        }
-                    })
-                    .unwrap_or_default();
-                [(format!("{:02} {title}", i + 1), time), (who, file)]
-            }
-            None => {
-                let n = self.rows.len();
-                if n == 0 {
-                    [
-                        ("No music loaded".to_string(), String::new()),
-                        ("Press Folder or Files".to_string(), String::new()),
-                    ]
-                } else {
-                    let total: f64 = self.rows.iter().filter_map(Row::seconds).sum();
-                    [
-                        (
-                            format!("{n} tracks"),
-                            if total > 0.0 {
-                                time_label(total)
-                            } else {
-                                String::new()
-                            },
-                        ),
-                        ("Stopped".to_string(), String::new()),
-                    ]
-                }
-            }
+        fmt += &rate_label(m.info.rate);
+        fmt += match m.info.channels {
+            1 => " · mono",
+            2 => "",
+            _ => " · multichannel",
         };
-        lcd(ui.painter(), lcd_rect, &lines);
-        let lcd_resp = ui
-            .interact(lcd_rect, Id::new("lcd"), Sense::click())
-            .on_hover_text("Click to show time elapsed or remaining");
-        if lcd_resp.clicked() {
-            self.s.remain = !self.s.remain;
-        }
+        (m.info.codec.clone(), fmt)
+    }
 
-        // Transport.
-        let state = self.state();
-        let k = |x: f32| Rect::from_min_size(at(x, 46.0), Vec2::new(54.0, 24.0));
-        legend(
-            ui.painter(),
-            at(886.0, 14.0),
-            Align2::CENTER_TOP,
-            "Transport",
-            th,
-        );
-        let x0 = 706.0;
-        let step = 64.0;
-        if key(ui, k(x0), Id::new("prev"), K_GREY, None, "Prev", th).clicked() {
-            self.previous();
-        }
-        if key(
-            ui,
-            k(x0 + step),
-            Id::new("play"),
-            K_CREAM,
-            Some(state == State::Playing),
-            "Play",
-            th,
-        )
-        .clicked()
-        {
-            match state {
-                State::Paused => self.engine.send(Cmd::Pause(false)),
-                State::Stopped => self.play_pause(),
-                State::Playing => {} // latched, as on a deck
-            }
-        }
-        if key(
-            ui,
-            k(x0 + step * 2.0),
-            Id::new("pause"),
-            K_YELLOW,
-            Some(state == State::Paused),
-            "Pause",
-            th,
-        )
-        .clicked()
-        {
-            match state {
-                State::Playing => self.engine.send(Cmd::Pause(true)),
-                State::Paused => self.engine.send(Cmd::Pause(false)),
-                State::Stopped => {}
-            }
-        }
-        if key(
-            ui,
-            k(x0 + step * 3.0),
-            Id::new("stop"),
-            K_GREY,
-            None,
-            "Stop",
-            th,
-        )
-        .clicked()
-        {
-            self.engine.send(Cmd::Stop);
-        }
-        if key(
-            ui,
-            k(x0 + step * 4.0),
-            Id::new("next"),
-            K_GREY,
-            None,
-            "Next",
-            th,
-        )
-        .clicked()
-        {
-            self.next();
-        }
-        if key(
-            ui,
-            k(x0 + step * 5.0),
-            Id::new("random"),
-            K_ORANGE,
-            None,
-            "Random",
-            th,
-        )
-        .clicked()
-        {
-            self.random();
-        }
-
-        // Open.
-        let ox = 1112.0;
-        legend(
-            ui.painter(),
-            at(ox + 27.0 + step, 14.0),
-            Align2::CENTER_TOP,
-            "Open",
-            th,
-        );
-        if key(ui, k(ox), Id::new("folder"), K_CREAM, None, "Folder", th).clicked() {
-            self.open_folder(t);
-        }
-        if key(
-            ui,
-            k(ox + step),
-            Id::new("files"),
-            K_CREAM,
-            None,
-            "Files",
-            th,
-        )
-        .clicked()
-        {
-            self.open_files(t);
-        }
-        if key(
-            ui,
-            k(ox + step * 2.0),
-            Id::new("clear"),
-            K_GREY,
-            None,
-            "Clear",
-            th,
-        )
-        .clicked()
-        {
-            self.clear();
-        }
-
-        // Family: the LED is lit when the app was found.
-        let fx = 1326.0;
-        legend(
-            ui.painter(),
-            at(fx + 27.0 + step, 14.0),
-            Align2::CENTER_TOP,
-            "Family",
-            th,
-        );
-        for (n, a) in App::ALL.into_iter().enumerate() {
-            let found = self
-                .found
-                .get(a.name())
-                .map(Option::is_some)
-                .unwrap_or(false);
-            let r = key(
-                ui,
-                k(fx + step * n as f32),
-                Id::new(("family", a.name())),
-                K_RED,
-                Some(found),
-                key_label(a),
-                th,
+    /// What the Player does to the signal: a light and a line. Simple says
+    /// it in plain words; Detailed gives the numbers. Neither claims more
+    /// than the Player knows.
+    fn signal_path(&self, i: usize, m: &Mark, simple: bool) -> (bool, String) {
+        let lowered = self.engine.shared.gain() != 1.0;
+        let paused = self.state() == State::Paused;
+        if simple {
+            let bits = m.info.bits.or_else(|| {
+                self.rows
+                    .get(i)
+                    .and_then(|r| r.tags.as_ref()?.bits)
+                    .map(u32::from)
+            });
+            let lossy = matches!(
+                m.info.codec.as_str(),
+                "MP3" | "AAC" | "Vorbis" | "Opus" | "MP2" | "MP1"
             );
-            let tip = if found {
-                format!("Start the {}", a.name())
+            let quality = if lossy {
+                "compressed"
+            } else if m.info.rate > 48_000 || bits.is_some_and(|b| b > 16) {
+                "high resolution"
+            } else if m.info.rate == 44_100 && bits == Some(16) {
+                "CD quality"
             } else {
-                format!("The {} isn't installed here", a.name())
+                "lossless"
             };
-            if r.on_hover_text(tip).clicked() {
-                self.start_family(a, t);
+            let mut s = String::from(if paused { "Paused" } else { "Playing" });
+            if m.resampled {
+                s += " · converted for this output";
+            } else {
+                s += " as recorded";
             }
+            s += " · ";
+            s += quality;
+            if lowered {
+                s += " · volume lowered";
+            }
+            (!m.resampled, s)
+        } else {
+            let mut s = if m.resampled {
+                format!("Resampled to {} for this output", rate_label(m.out_rate))
+            } else if lowered {
+                format!("Native rate · volume {:.1} dB", self.s.volume_db)
+            } else {
+                "Native rate, untouched".to_string()
+            };
+            if m.resampled && lowered {
+                s += &format!(" · volume {:.1} dB", self.s.volume_db);
+            }
+            (!m.resampled, s)
+        }
+    }
+
+    fn output_line(&self) -> String {
+        match &self.output {
+            Some(o) => format!(
+                "Out: {} · {} · {} · {} ch · {}",
+                o.host,
+                if o.device.starts_with("default") {
+                    "System default"
+                } else {
+                    &o.device
+                },
+                rate_label(o.rate),
+                o.channels,
+                o.format
+            ),
+            None => "Output closed".to_string(),
+        }
+    }
+
+    /// Gaps in the sound because the output ran dry, if there were any.
+    fn dropouts(&self) -> Option<String> {
+        let n = self
+            .engine
+            .shared
+            .underruns
+            .load(std::sync::atomic::Ordering::Relaxed);
+        (n > 0).then(|| format!("{n} dropout{} so far", if n == 1 { "" } else { "s" }))
+    }
+
+    // ------------------------------------------------------------ top
+
+    fn plate(&mut self, ui: &mut Ui, screen: Rect, t: &Tokens) {
+        let now = now(ui);
+        let plate = Rect::from_min_size(screen.min, Vec2::new(screen.width(), PLATE_H));
+        if !self.s.system_title_bar {
+            hifi::drag_to_move(ui, plate);
+        }
+        hifi::nameplate(
+            ui,
+            screen.min + Vec2::new(24.0, 14.0),
+            t,
+            "Player",
+            &format!("PL-001 · Music player · V{VERSION}"),
+        );
+        if !self.s.system_title_bar {
+            hifi::window_buttons(ui, Pos2::new(screen.right() - 10.0, screen.top() + 10.0), t);
+        }
+        let right = screen.right() - 24.0;
+        let row = screen.top() + 66.0;
+        let gear = Rect::from_min_size(Pos2::new(right - 30.0, row - 15.0), Vec2::splat(30.0));
+        if hifi::gear_button(ui, gear, Id::new("settings"), t, self.settings_open).clicked() {
+            self.settings_open = !self.settings_open;
+        }
+        let (seg, picked) = hifi::segmented(
+            ui,
+            Pos2::new(gear.left() - 12.0, row),
+            true,
+            Id::new("simple"),
+            t,
+            &["Simple", "Detailed"],
+            if self.s.simple { 0 } else { 1 },
+            hifi::Seg::Plain,
+            &[],
+            &[],
+        );
+        if let Some(i) = picked {
+            self.s.simple = i == 0;
+        }
+        let found = |a: App| self.found.get(a.name()).is_some_and(Option::is_some);
+        let installed = [
+            found(App::Library),
+            true,
+            found(App::Equaliser),
+            found(App::Analyser),
+        ];
+        let (_, picked) =
+            hifi::family_switch(ui, Pos2::new(seg.left() - 14.0, row), t, 1, installed);
+        let app = match picked {
+            Some(0) => Some(App::Library),
+            Some(2) => Some(App::Equaliser),
+            Some(3) => Some(App::Analyser),
+            _ => None,
+        };
+        if let Some(a) = app {
+            self.start_family(a, now);
         }
     }
 
     // ------------------------------------------------------------ left column
 
-    fn left(&mut self, ui: &mut Ui, rect: Rect, th: &Theme) {
-        let t = now(ui);
+    fn left(&mut self, ui: &mut Ui, rect: Rect, t: &Tokens) {
         let np = self.now_playing().map(|(i, secs, m)| (i, secs, m.clone()));
         let current = np
             .as_ref()
@@ -923,9 +815,7 @@ impl PlayerApp {
             .filter(|&i| i < self.rows.len());
 
         // Artwork.
-        let size = (rect.height() - 372.0).clamp(160.0, LEFT_W);
-        let art = Rect::from_min_size(rect.min, Vec2::splat(size));
-        well(ui.painter(), art, th);
+        let art = Rect::from_min_size(rect.min, Vec2::splat(rect.width()));
         let tex = current.and_then(|i| {
             let path = self.rows[i].path.clone();
             self.art.get(ui.ctx(), &path, self.root.as_deref())
@@ -935,15 +825,18 @@ impl PlayerApp {
                 let s = tex.size_vec2();
                 let scale = (art.width() / s.x).min(art.height() / s.y);
                 let r = Rect::from_center_size(art.center(), s * scale);
-                ui.painter().image(
-                    tex.id(),
-                    r,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                    Color32::WHITE,
+                ui.painter().rect_filled(
+                    r.translate(Vec2::new(0.0, 3.0)),
+                    CornerRadius::same(10),
+                    Color32::from_black_alpha(if t.dark { 70 } else { 28 }),
                 );
+                egui::Image::new((tex.id(), r.size()))
+                    .corner_radius(8)
+                    .paint_at(ui, r);
             }
             None => {
-                legend(
+                hifi::well(ui.painter(), art, t);
+                hifi::label(
                     ui.painter(),
                     art.center(),
                     Align2::CENTER_CENTER,
@@ -952,401 +845,414 @@ impl PlayerApp {
                     } else {
                         "Artwork"
                     },
-                    th,
+                    hifi::ui_font(13.0),
+                    t.dim,
                 );
             }
         }
 
         // The track: title, artist, album.
-        let mut y = art.bottom() + 14.0;
-        let w = rect.width();
         let p = ui.painter();
-        if let Some(i) = current {
-            let r = &self.rows[i];
-            fit(
-                p,
-                Pos2::new(rect.left(), y),
-                Align2::LEFT_TOP,
-                &r.title(),
-                font(F_LEGEND_BOLD, 20.0),
-                th.legend,
-                w,
-            );
-            fit(
-                p,
-                Pos2::new(rect.left(), y + 27.0),
-                Align2::LEFT_TOP,
-                &r.artist(),
-                font(F_LEGEND, 15.0),
-                th.legend,
-                w,
-            );
-            fit(
-                p,
-                Pos2::new(rect.left(), y + 48.0),
-                Align2::LEFT_TOP,
-                &r.album(),
-                font(F_LEGEND, 13.0),
-                th.legend_dim,
-                w,
-            );
+        let w = rect.width();
+        let x = rect.left();
+        let mut y = art.bottom() + 16.0;
+        match current {
+            Some(i) => {
+                let r = &self.rows[i];
+                hifi::label_fit(
+                    p,
+                    Pos2::new(x, y),
+                    Align2::LEFT_TOP,
+                    &r.title(),
+                    hifi::bold(20.0),
+                    t.text,
+                    w,
+                );
+                hifi::label_fit(
+                    p,
+                    Pos2::new(x, y + 28.0),
+                    Align2::LEFT_TOP,
+                    &r.artist(),
+                    hifi::ui_font(15.0),
+                    t.text,
+                    w,
+                );
+                let mut line = r.album();
+                if !self.s.simple {
+                    let n = format!("Track {} of {}", i + 1, self.rows.len());
+                    line = if line.is_empty() {
+                        n
+                    } else {
+                        format!("{line} · {n}")
+                    };
+                }
+                hifi::label_fit(
+                    p,
+                    Pos2::new(x, y + 50.0),
+                    Align2::LEFT_TOP,
+                    &line,
+                    hifi::ui_font(13.0),
+                    t.dim,
+                    w,
+                );
+            }
+            None => {
+                hifi::label(
+                    p,
+                    Pos2::new(x, y),
+                    Align2::LEFT_TOP,
+                    if self.rows.is_empty() {
+                        "No music loaded"
+                    } else {
+                        "Stopped"
+                    },
+                    hifi::bold(20.0),
+                    t.text,
+                );
+                hifi::label_fit(
+                    p,
+                    Pos2::new(x, y + 28.0),
+                    Align2::LEFT_TOP,
+                    if self.rows.is_empty() {
+                        "Open a folder or files, or drop them on the window."
+                    } else {
+                        "Double-click a track, or press Play."
+                    },
+                    hifi::ui_font(13.0),
+                    t.dim,
+                    w,
+                );
+            }
         }
-        y += 72.0;
+        y += 82.0;
 
         // What the file is, and what's being done to it.
         if let Some((i, _, m)) = &np {
-            let mut x = rect.left();
-            x += chip(p, Pos2::new(x, y + 8.0), &m.info.codec, STRIPE[3], true) + 6.0;
-            let mut fmt = String::new();
-            // ALAC in M4A only gives its bit depth in the file's header.
-            let bits = m.info.bits.or_else(|| {
-                (m.info.codec == "ALAC")
-                    .then(|| self.rows.get(*i).and_then(|r| r.tags.as_ref()?.bits))
-                    .flatten()
-                    .map(u32::from)
-            });
-            if let Some(b) = bits {
-                fmt += &format!("{b}-bit · ");
-            }
-            fmt += &rate_label(m.info.rate);
-            fmt += match m.info.channels {
-                1 => " · mono",
-                2 => "",
-                _ => " · multichannel",
-            };
-            chip(p, Pos2::new(x, y + 8.0), &fmt, th.legend_dim, false);
-            let gain = self.engine.shared.gain();
-            let (l, path) = if m.resampled {
-                (
-                    Light::Warn,
-                    format!("Resampled to {} for this output", rate_label(m.out_rate)),
-                )
+            let simple = self.s.simple;
+            let (ok, path) = self.signal_path(*i, m, simple);
+            let p = ui.painter();
+            // Resampling is worth knowing, not a fault: amber, not red.
+            let light = if ok {
+                t.ok
             } else {
-                (
-                    Light::Ok,
-                    format!("Native rate: {} out", rate_label(m.out_rate)),
-                )
+                Color32::from_rgb(0xe0, 0xa0, 0x30)
             };
-            let path = if gain != 1.0 {
-                format!("{path} · volume {:.1} dB", self.s.volume_db)
+            if simple {
+                hifi::status_light(p, Pos2::new(x + 5.0, y + 9.0), light);
+                hifi::label_fit(
+                    p,
+                    Pos2::new(x + 18.0, y + 9.0),
+                    Align2::LEFT_CENTER,
+                    &path,
+                    hifi::ui_font(13.0),
+                    t.text,
+                    w - 18.0,
+                );
             } else {
-                path
-            };
-            light(p, Pos2::new(rect.left() + 5.0, y + 30.0), l, th);
-            fit(
-                p,
-                Pos2::new(rect.left() + 16.0, y + 30.0),
-                Align2::LEFT_CENTER,
-                &path,
-                font(F_LEGEND, 13.0),
-                th.legend,
-                w - 16.0,
-            );
-        }
-        y += 48.0;
-        // The output row sits on the bottom edge; position and meters
-        // above it.
-        let row_top = rect.bottom() - 64.0;
-        y = y.max(row_top - 146.0);
-
-        // Position.
-        self.position_bar(
-            ui,
-            Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(w, 40.0)),
-            np.as_ref(),
-            th,
-        );
-        y += 52.0;
-
-        // Meters.
-        let p = ui.painter();
-        let mr = Rect::from_min_size(Pos2::new(rect.left() + 18.0, y), Vec2::new(w - 18.0, 26.0));
-        meter(p, mr, self.meter_db);
-        for (n, s) in ["L", "R"].iter().enumerate() {
-            text(
-                p,
-                Pos2::new(rect.left() + 4.0, mr.top() + 7.0 + n as f32 * 12.0),
-                Align2::LEFT_CENTER,
-                s,
-                font(F_LEGEND_BOLD, 10.0),
-                th.legend_dim,
-                0.0,
-            );
-        }
-        for db in [-48, -36, -24, -12, -6, -3, 0] {
-            let x = mr.left() + 3.0 + (mr.width() - 6.0) * (db as f32 + 48.0) / 48.0;
-            text(
-                p,
-                Pos2::new(x, mr.bottom() + 4.0),
-                if db == 0 {
-                    Align2::RIGHT_TOP
+                let (codec, fmt) = self.format_chips(*i, m);
+                hifi::status_light(p, Pos2::new(x + 5.0, y + 9.0), light);
+                let mut cx = x + 18.0;
+                cx += chip(p, Pos2::new(cx, y + 9.0), &codec, t) + 6.0;
+                cx += chip(p, Pos2::new(cx, y + 9.0), &fmt, t) + 8.0;
+                let need = p
+                    .layout_no_wrap(path.clone(), hifi::ui_font(13.0), t.text)
+                    .size()
+                    .x;
+                if cx + need <= rect.right() {
+                    hifi::label_fit(
+                        p,
+                        Pos2::new(cx, y + 9.0),
+                        Align2::LEFT_CENTER,
+                        &path,
+                        hifi::ui_font(13.0),
+                        t.text,
+                        rect.right() - cx,
+                    );
+                    y += 26.0;
                 } else {
-                    Align2::CENTER_TOP
+                    hifi::label_fit(
+                        p,
+                        Pos2::new(x + 18.0, y + 35.0),
+                        Align2::LEFT_CENTER,
+                        &path,
+                        hifi::ui_font(13.0),
+                        t.text,
+                        w - 18.0,
+                    );
+                    y += 52.0;
+                }
+                hifi::label_fit(
+                    p,
+                    Pos2::new(x + 18.0, y + 9.0),
+                    Align2::LEFT_CENTER,
+                    &self.output_line(),
+                    hifi::ui_font(11.5),
+                    t.dim,
+                    w - 18.0,
+                );
+                if let Some(d) = self.dropouts() {
+                    hifi::label_fit(
+                        p,
+                        Pos2::new(x + 18.0, y + 27.0),
+                        Align2::LEFT_CENTER,
+                        &d,
+                        hifi::ui_font(11.5),
+                        t.dim,
+                        w - 18.0,
+                    );
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ display
+
+    fn display(&mut self, ui: &mut Ui, rect: Rect, t: &Tokens) {
+        hifi::display(ui.painter(), rect, t);
+        let np = self.now_playing().map(|(i, secs, m)| (i, secs, m.clone()));
+
+        // Time, big, with what it is under it. Click to switch between
+        // elapsed and remaining.
+        let time_r = Rect::from_min_size(rect.min, Vec2::new(230.0, rect.height()));
+        let resp = ui
+            .interact(time_r, Id::new("time"), Sense::click())
+            .on_hover_cursor(CursorIcon::PointingHand)
+            .on_hover_text("Click to show time elapsed or remaining");
+        if resp.clicked() {
+            self.s.remain = !self.s.remain;
+        }
+        let (time, under) = match &np {
+            Some((i, secs, m)) => {
+                let len = m
+                    .info
+                    .seconds()
+                    .or_else(|| self.rows.get(*i).and_then(Row::seconds));
+                let secs = match (self.seeking, len) {
+                    (Some(f), Some(l)) => f as f64 * l,
+                    _ => *secs,
+                };
+                let remain = self.s.remain && len.is_some();
+                (
+                    if remain {
+                        format!("-{}", time_label(len.unwrap_or(0.0) - secs))
+                    } else {
+                        time_label(secs)
+                    },
+                    format!(
+                        "{} · TRACK {:02}",
+                        if remain { "REMAINING" } else { "ELAPSED" },
+                        i + 1
+                    ),
+                )
+            }
+            None => (
+                "-:--".to_string(),
+                if self.rows.is_empty() {
+                    "NO MUSIC".to_string()
+                } else {
+                    "STOPPED".to_string()
                 },
-                &db.to_string(),
-                font(F_LEGEND, 9.5),
-                th.legend_dim,
-                0.0,
+            ),
+        };
+        let p = ui.painter();
+        hifi::ink_text(
+            p,
+            Pos2::new(rect.left() + 20.0, rect.top() + 18.0),
+            Align2::LEFT_TOP,
+            &time,
+            hifi::num(40.0),
+            t,
+        );
+        hifi::label(
+            p,
+            Pos2::new(rect.left() + 22.0, rect.top() + 72.0),
+            Align2::LEFT_TOP,
+            &under,
+            hifi::num(11.0),
+            t.ink_faint(0.7),
+        );
+
+        // Meters, and the spectrum under them.
+        let mx = rect.left() + 250.0;
+        let mw = rect.right() - 20.0 - mx;
+        for (c, s) in ["L", "R"].iter().enumerate() {
+            let y = rect.top() + 20.0 + c as f32 * 16.0;
+            hifi::label(
+                p,
+                Pos2::new(mx - 14.0, y + 5.0),
+                Align2::CENTER_CENTER,
+                s,
+                hifi::num(10.0),
+                t.ink_faint(0.7),
+            );
+            hifi::meter(
+                p,
+                Rect::from_min_size(Pos2::new(mx, y), Vec2::new(mw, 10.0)),
+                t,
+                self.meter_db[c],
             );
         }
-
-        // Output: volume, device, spectrum and panel.
-        let kc = Pos2::new(rect.left() + 24.0, row_top + 24.0);
-        let before = self.s.volume_db;
-        knob(
-            ui,
-            kc,
-            18.0,
-            Id::new("volume"),
-            &mut self.s.volume_db,
-            &VOLUME,
-            Some(FAM_TONE),
-            th,
-        )
-        .on_hover_text("Volume. At 0 dB the samples are left untouched.");
-        if self.s.volume_db != before {
-            self.engine.send(Cmd::Gain(db_to_gain(self.s.volume_db)));
-        }
-        let vol = if self.s.volume_db >= 0.0 {
-            "0 dB".to_string()
-        } else {
-            format!("{:.1} dB", self.s.volume_db)
-        };
-        readout(ui.painter(), Pos2::new(kc.x, kc.y + 26.0), &vol, 52.0);
-        legend(
-            ui.painter(),
-            Pos2::new(kc.x, row_top - 14.0),
-            Align2::CENTER_TOP,
-            "Volume",
-            th,
-        );
-
-        let combo = Rect::from_min_size(
-            Pos2::new(rect.left() + 66.0, row_top + 12.0),
-            Vec2::new(230.0, 24.0),
-        );
-        legend(
-            ui.painter(),
-            Pos2::new(combo.left(), row_top - 14.0),
-            Align2::LEFT_TOP,
-            "Output",
-            th,
-        );
-        let mut items = vec!["System default".to_string()];
-        items.extend(self.devices.iter().cloned());
-        let sel = self
-            .s
-            .device
-            .as_ref()
-            .and_then(|d| items.iter().position(|x| x == d))
-            .unwrap_or(0);
-        if let Some(n) = lcd_combo(ui, combo, "device", &items, sel) {
-            self.s.device = (n > 0).then(|| items[n].clone());
-            self.engine.send(Cmd::Device(self.s.device.clone()));
-            self.tell(format!("Output: {}", items[n]), t);
-        }
-        let kr = |x: f32| Rect::from_min_size(Pos2::new(x, row_top + 12.0), Vec2::new(54.0, 24.0));
-        if lit_key(
-            ui,
-            kr(rect.left() + 314.0),
-            Id::new("spectrum"),
-            LCD_INK,
-            self.s.spectrum,
-            "Spectrum",
-            th,
-        )
-        .clicked()
-        {
-            self.s.spectrum = !self.s.spectrum;
-        }
-        let panel_label = match self.s.panel {
-            PanelKind::Black => "Black",
-            PanelKind::Silver => "Silver",
-        };
-        if key(
-            ui,
-            kr(rect.left() + 382.0),
-            Id::new("panel"),
-            K_GREY,
-            None,
-            panel_label,
-            th,
-        )
-        .on_hover_text("Black or Silver panel")
-        .clicked()
-        {
-            self.s.panel = match self.s.panel {
-                PanelKind::Black => PanelKind::Silver,
-                PanelKind::Silver => PanelKind::Black,
-            };
+        if self.s.spectrum && self.state() == State::Playing {
+            let sp = Rect::from_min_max(
+                Pos2::new(mx, rect.top() + 58.0),
+                Pos2::new(rect.right() - 20.0, rect.bottom() - 14.0),
+            );
+            self.spectrum_bars(p, sp, t);
         }
     }
 
-    fn position_bar(
-        &mut self,
-        ui: &mut Ui,
-        rect: Rect,
-        np: Option<&(usize, f64, Mark)>,
-        th: &Theme,
-    ) {
-        let len = np.and_then(|(i, _, m)| {
-            m.info
-                .seconds()
-                .or_else(|| self.rows.get(*i).and_then(Row::seconds))
-        });
-        let secs = np.map(|(_, s, _)| *s).unwrap_or(0.0);
-        let groove = Rect::from_min_size(
-            Pos2::new(rect.left(), rect.top() + 6.0),
-            Vec2::new(rect.width(), 8.0),
-        );
-        let resp = ui.interact(
-            groove.expand2(Vec2::new(0.0, 8.0)),
-            Id::new("seek"),
-            Sense::click_and_drag(),
-        );
-        let frac_at = |x: f32| ((x - groove.left()) / groove.width()).clamp(0.0, 1.0);
-        if let (Some(l), Some(pos)) = (len, resp.interact_pointer_pos()) {
-            if resp.dragged() || resp.is_pointer_button_down_on() {
-                self.seeking = Some(frac_at(pos.x));
-            }
-            if resp.drag_stopped() || resp.clicked() {
-                let f = frac_at(pos.x) as f64;
-                self.engine.send(Cmd::Seek((f * l).min((l - 0.5).max(0.0))));
-                self.seeking = None;
-            }
-        }
-        if !resp.is_pointer_button_down_on() && !resp.dragged() {
-            self.seeking = None;
-        }
-        let shown = match (self.seeking, len) {
-            (Some(f), Some(_)) => f,
-            (_, Some(l)) if l > 0.0 => (secs / l).clamp(0.0, 1.0) as f32,
-            _ => 0.0,
-        };
-        let p = ui.painter();
-        p.rect_filled(groove.expand(2.0), CornerRadius::same(3), Color32::BLACK);
-        p.rect_filled(groove, CornerRadius::same(2), LCD_BG);
-        let fill = Rect::from_min_size(
-            groove.min,
-            Vec2::new(groove.width() * shown, groove.height()),
-        );
-        p.rect_filled(fill, CornerRadius::same(2), LCD_INK.gamma_multiply(0.85));
-        if len.is_some() {
-            let x = groove.left() + groove.width() * shown;
-            p.rect_filled(
-                Rect::from_center_size(Pos2::new(x, groove.center().y), Vec2::new(4.0, 16.0)),
-                CornerRadius::same(1),
-                th.legend,
-            );
-        }
-        if resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        let shown_secs = match (self.seeking, len) {
-            (Some(f), Some(l)) => f as f64 * l,
-            _ => secs,
-        };
-        let p = ui.painter();
-        text(
-            p,
-            Pos2::new(rect.left(), groove.bottom() + 8.0),
-            Align2::LEFT_TOP,
-            &if np.is_some() {
-                time_label(shown_secs)
-            } else {
-                "-:--".into()
-            },
-            font(F_MONO, 12.0),
-            th.legend_dim,
-            0.5,
-        );
-        text(
-            p,
-            Pos2::new(rect.right(), groove.bottom() + 8.0),
-            Align2::RIGHT_TOP,
-            &len.map(time_label).unwrap_or_else(|| "-:--".into()),
-            font(F_MONO, 12.0),
-            th.legend_dim,
-            0.5,
-        );
-    }
-
-    // ------------------------------------------------------------ right column
-
-    fn spectrum_strip(&self, ui: &Ui, rect: Rect) {
-        let p = ui.painter().with_clip_rect(rect.expand(2.0));
-        p.rect_filled(rect.expand(2.0), CornerRadius::same(4), Color32::BLACK);
-        p.rect_filled(rect, CornerRadius::same(3), LCD_BG);
-        let plot = rect.shrink2(Vec2::new(8.0, 6.0));
-        let (f_min, f_max) = (20.0f32, 20_000.0f32);
-        let f_of = |x: f32| f_min * ((x - plot.left()) / plot.width() * (f_max / f_min).ln()).exp();
-        let range = 84.0;
-        let lvl = |db: f32| ((db + range) / range).clamp(0.0, 1.0);
+    fn spectrum_bars(&self, p: &egui::Painter, r: Rect, t: &Tokens) {
+        const BARS: usize = 40;
+        let (f_min, f_max) = (30.0f32, 16_000.0f32);
+        let gap = 3.0;
+        let w = (r.width() - gap * (BARS - 1) as f32) / BARS as f32;
+        let range = 72.0;
         let sr = self.analyzer.sample_rate;
-        let mut pts = Vec::new();
-        let mut levels = Vec::new();
-        let mut x = plot.left();
-        while x <= plot.right() {
-            let (f0, f1) = (f_of(x - 1.5), f_of(x + 1.5));
+        for b in 0..BARS {
+            let f0 = f_min * (f_max / f_min).powf(b as f32 / BARS as f32);
+            let f1 = f_min * (f_max / f_min).powf((b + 1) as f32 / BARS as f32);
             // A 3 dB/octave tilt so music reads level.
-            let tilt = 3.0 * (f_of(x) / 1000.0).log2();
-            let l = lvl(self.analyzer.level(f0, f1, sr) + tilt);
-            pts.push(Pos2::new(x, plot.bottom() - l * plot.height()));
-            levels.push(l);
-            x += 3.0;
+            let tilt = 3.0 * ((f0 * f1).sqrt() / 1000.0).log2();
+            let db = self.analyzer.level(f0, f1, sr) + tilt;
+            let l = ((db + range) / range).clamp(0.0, 1.0);
+            let h = (l * r.height()).max(2.0);
+            let x = r.left() + b as f32 * (w + gap);
+            p.rect_filled(
+                Rect::from_min_max(Pos2::new(x, r.bottom() - h), Pos2::new(x + w, r.bottom())),
+                CornerRadius::same(1),
+                t.ink.gamma_multiply(0.85),
+            );
         }
-        spectrum::draw(
-            &p,
-            &pts,
-            &levels,
-            plot.left(),
-            plot.right(),
-            plot.bottom(),
-            spectrum::Style {
-                scheme: Scheme::Display,
-                fill: Look::FillAndLine,
-                strength: 0.9,
-            },
-        );
     }
 
-    fn playlist(&mut self, ui: &mut Ui, rect: Rect, th: &Theme) {
+    // ------------------------------------------------------------ list
+
+    fn toolbar(&mut self, ui: &mut Ui, rect: Rect, t: &Tokens) {
+        let now = now(ui);
+        let mut x = rect.left();
+        let y = rect.center().y;
+        for (id, s) in [
+            ("folder", "Open folder"),
+            ("files", "Open files"),
+            ("clear", "Clear"),
+        ] {
+            let w = hifi::button_width(ui, s);
+            let r = Rect::from_min_size(Pos2::new(x, y - 14.0), Vec2::new(w, 28.0));
+            if hifi::button(ui, r, Id::new(id), t, s, false).clicked() {
+                match id {
+                    "folder" => self.open_folder(now),
+                    "files" => self.open_files(now),
+                    _ => self.clear(),
+                }
+            }
+            x += w + 8.0;
+        }
+        let p = ui.painter();
+        let room = rect.right() - x - 16.0;
+        match &self.message {
+            Some((m, at)) if now - at < 10.0 => {
+                // Up to two lines, so a longer message still fits.
+                let mut job = egui::text::LayoutJob::single_section(
+                    m.clone(),
+                    egui::TextFormat {
+                        font_id: hifi::ui_font(12.5),
+                        color: t.text,
+                        ..Default::default()
+                    },
+                );
+                job.wrap = egui::text::TextWrapping {
+                    max_width: room,
+                    max_rows: 2,
+                    break_anywhere: false,
+                    overflow_character: Some('…'),
+                };
+                let g = p.layout_job(job);
+                let at = Pos2::new(rect.right() - g.size().x, y - g.size().y / 2.0);
+                p.galley(at, g, t.text);
+            }
+            _ if !self.rows.is_empty() => {
+                let n = self.rows.len();
+                let total: f64 = self.rows.iter().filter_map(Row::seconds).sum();
+                let mut s = format!("{n} track{}", if n == 1 { "" } else { "s" });
+                if total > 0.0 {
+                    s += &format!(" · {}", duration_words(total));
+                }
+                hifi::label_fit(
+                    p,
+                    Pos2::new(rect.right(), y),
+                    Align2::RIGHT_CENTER,
+                    &s,
+                    hifi::ui_font(13.0),
+                    t.dim,
+                    room,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn playlist(&mut self, ui: &mut Ui, rect: Rect, t: &Tokens) {
         let playing = self.now_playing().map(|(i, _, _)| i);
-        well(ui.painter(), rect, th);
-        let head = Rect::from_min_size(rect.min, Vec2::new(rect.width(), 26.0));
-        let x0 = rect.left() + 12.0;
-        let w = rect.width() - 24.0;
+        hifi::well(ui.painter(), rect, t);
+        let head = Rect::from_min_size(rect.min, Vec2::new(rect.width(), 32.0));
+        let detailed = !self.s.simple;
+        let x0 = rect.left() + 14.0;
+        let c_num = x0 + 26.0;
         let c_title = x0 + 40.0;
-        let c_time = rect.right() - 12.0 - 52.0;
-        let flex = c_time - c_title - 16.0;
-        let c_artist = c_title + flex * 0.42;
-        let c_album = c_title + flex * 0.70;
-        let c_type = rect.right() - 12.0;
-        lists::header(
-            ui.painter(),
-            head,
-            &[
-                (x0 + 24.0, "#", Align2::RIGHT_CENTER),
-                (c_title, "Title", Align2::LEFT_CENTER),
-                (c_artist, "Artist", Align2::LEFT_CENTER),
-                (c_album, "Album", Align2::LEFT_CENTER),
-                (c_time, "Time", Align2::RIGHT_CENTER),
-                (c_type, "Type", Align2::RIGHT_CENTER),
-            ],
-            th,
-        );
-        let _ = w;
+        let c_type = rect.right() - 14.0;
+        let c_time = if detailed {
+            c_type - 52.0
+        } else {
+            rect.right() - 14.0
+        };
+        let flex = c_time - c_title - 60.0;
+        let (c_artist, c_album) = if detailed {
+            (c_title + flex * 0.42, Some(c_title + flex * 0.71))
+        } else {
+            (c_title + flex * 0.6, None)
+        };
+        {
+            let p = ui.painter();
+            let hl = |x: f32, s: &str, a: Align2| {
+                hifi::label(
+                    p,
+                    Pos2::new(x, head.center().y),
+                    a,
+                    s,
+                    hifi::semi(10.5),
+                    t.dim,
+                );
+            };
+            hl(c_num, "#", Align2::RIGHT_CENTER);
+            hl(c_title, "TITLE", Align2::LEFT_CENTER);
+            hl(c_artist, "ARTIST", Align2::LEFT_CENTER);
+            if let Some(c) = c_album {
+                hl(c, "ALBUM", Align2::LEFT_CENTER);
+            }
+            hl(c_time, "TIME", Align2::RIGHT_CENTER);
+            if detailed {
+                hl(c_type, "TYPE", Align2::RIGHT_CENTER);
+            }
+            p.line_segment(
+                [
+                    Pos2::new(rect.left() + 1.0, head.bottom()),
+                    Pos2::new(rect.right() - 1.0, head.bottom()),
+                ],
+                Stroke::new(1.0, t.line),
+            );
+        }
         let body = Rect::from_min_max(
-            Pos2::new(rect.left(), head.bottom() + 2.0),
-            rect.max - Vec2::new(0.0, 2.0),
+            Pos2::new(rect.left() + 1.0, head.bottom() + 1.0),
+            rect.max - Vec2::new(1.0, 2.0),
         );
         if self.rows.is_empty() {
-            legend(
+            hifi::label(
                 ui.painter(),
                 body.center(),
                 Align2::CENTER_CENTER,
                 "Open a folder, files or a playlist, or drop them here",
-                th,
+                hifi::ui_font(13.0),
+                t.dim,
             );
             return;
         }
@@ -1368,81 +1274,94 @@ impl PlayerApp {
             |ui, i, r, resp| {
                 let row = &rows[i];
                 let p = ui.painter();
-                lists::row_bg(p, r, resp, selected == Some(i), th);
+                if selected == Some(i) {
+                    p.rect_filled(r, 0, t.select);
+                } else if resp.hovered() {
+                    p.rect_filled(r, 0, t.line_soft);
+                }
+                p.line_segment(
+                    [r.left_bottom(), r.right_bottom()],
+                    Stroke::new(1.0, t.line_soft),
+                );
                 let is_playing = playing == Some(i);
-                let ink = if is_playing { LCD_INK } else { th.legend };
+                let ink = if is_playing { t.accent } else { t.text };
                 let y = r.center().y;
                 if is_playing {
-                    // A small play triangle in place of the number.
-                    let c = Pos2::new(x0 + 16.0, y);
-                    p.add(egui::Shape::convex_polygon(
+                    let c = Pos2::new(c_num - 6.0, y);
+                    p.add(Shape::convex_polygon(
                         vec![
                             c + Vec2::new(-4.0, -5.0),
                             c + Vec2::new(5.0, 0.0),
                             c + Vec2::new(-4.0, 5.0),
                         ],
-                        LCD_INK,
+                        t.accent,
                         Stroke::NONE,
                     ));
                 } else {
-                    text(
+                    hifi::label(
                         p,
-                        Pos2::new(x0 + 24.0, y),
+                        Pos2::new(c_num, y),
                         Align2::RIGHT_CENTER,
                         &(i + 1).to_string(),
-                        font(F_MONO, 12.0),
-                        th.legend_dim,
-                        0.0,
+                        hifi::num(12.0),
+                        t.dim,
                     );
                 }
-                let f = font(F_LEGEND, 14.0);
-                fit(
+                let f = if is_playing {
+                    hifi::semi(14.0)
+                } else {
+                    hifi::ui_font(14.0)
+                };
+                hifi::label_fit(
                     p,
                     Pos2::new(c_title, y),
                     Align2::LEFT_CENTER,
                     &row.title(),
-                    f.clone(),
+                    f,
                     ink,
-                    c_artist - c_title - 12.0,
+                    c_artist - c_title - 14.0,
                 );
-                fit(
+                let artist_end = c_album.unwrap_or(c_time - 60.0);
+                hifi::label_fit(
                     p,
                     Pos2::new(c_artist, y),
                     Align2::LEFT_CENTER,
                     &row.artist(),
-                    f.clone(),
-                    th.legend_dim,
-                    c_album - c_artist - 12.0,
+                    hifi::ui_font(13.5),
+                    t.dim,
+                    artist_end - c_artist - 14.0,
                 );
-                fit(
-                    p,
-                    Pos2::new(c_album, y),
-                    Align2::LEFT_CENTER,
-                    &row.album(),
-                    f.clone(),
-                    th.legend_dim,
-                    c_time - c_album - 60.0,
-                );
+                if let Some(c) = c_album {
+                    hifi::label_fit(
+                        p,
+                        Pos2::new(c, y),
+                        Align2::LEFT_CENTER,
+                        &row.album(),
+                        hifi::ui_font(13.5),
+                        t.dim,
+                        c_time - c - 60.0,
+                    );
+                }
                 if let Some(s) = row.seconds() {
-                    text(
+                    hifi::label(
                         p,
                         Pos2::new(c_time, y),
                         Align2::RIGHT_CENTER,
                         &time_label(s),
-                        font(F_MONO, 12.0),
-                        th.legend_dim,
-                        0.0,
+                        hifi::num(12.0),
+                        t.dim,
                     );
                 }
-                text(
-                    p,
-                    Pos2::new(c_type, y),
-                    Align2::RIGHT_CENTER,
-                    &row.ext,
-                    font(F_LEGEND_BOLD, 10.5),
-                    th.legend_dim,
-                    1.0,
-                );
+                if detailed {
+                    hifi::label(
+                        p,
+                        Pos2::new(c_type, y),
+                        Align2::RIGHT_CENTER,
+                        &row.ext,
+                        hifi::semi(10.5),
+                        t.dim,
+                    );
+                }
                 if resp.double_clicked() {
                     double = Some(i);
                 } else if resp.clicked() {
@@ -1459,123 +1378,574 @@ impl PlayerApp {
         }
     }
 
-    fn footer(&mut self, ui: &mut Ui, panel: Rect, th: &Theme) {
-        let t = now(ui);
-        let y = panel.bottom() - 20.0;
+    // ------------------------------------------------------------ transport bar
+
+    fn transport(&mut self, ui: &mut Ui, bar: Rect, t: &Tokens) {
+        hifi::bar(ui.painter(), bar, t);
+        let cy = bar.center().y;
+        let x0 = bar.left() + 24.0;
+        let state = self.state();
+
+        let buttons = [
+            (
+                18.0,
+                18.0,
+                Btn::Flat,
+                Icon::Shuffle,
+                "random",
+                "Random: shuffle the list and play it",
+            ),
+            (
+                62.0,
+                21.0,
+                Btn::Raised,
+                Icon::Prev,
+                "prev",
+                "Previous (Shift+Left)",
+            ),
+            (
+                120.0,
+                29.0,
+                Btn::Primary,
+                if state == State::Playing {
+                    Icon::Pause
+                } else {
+                    Icon::Play
+                },
+                "play",
+                "Play or pause (Space)",
+            ),
+            (
+                178.0,
+                21.0,
+                Btn::Raised,
+                Icon::Next,
+                "next",
+                "Next (Shift+Right)",
+            ),
+            (222.0, 18.0, Btn::Flat, Icon::Stop, "stop", "Stop"),
+        ];
+        for (dx, r, kind, icon, id, tip) in buttons {
+            let c = Pos2::new(x0 + dx, cy);
+            if round_button(ui, c, r, Id::new(id), t, kind, icon)
+                .on_hover_text(tip)
+                .clicked()
+            {
+                match id {
+                    "random" => self.random(),
+                    "prev" => self.previous(),
+                    "play" => self.play_pause(),
+                    "next" => self.next(),
+                    _ => self.engine.send(Cmd::Stop),
+                }
+            }
+        }
+
+        // Volume on the right; the position fills the middle.
+        let vol_w = 130.0;
+        let vol = Rect::from_min_size(
+            Pos2::new(bar.right() - 24.0 - vol_w, cy - 9.0),
+            Vec2::new(vol_w, 18.0),
+        );
+        speaker(
+            ui.painter(),
+            Pos2::new(vol.left() - 22.0, cy),
+            t.dim,
+            self.s.volume_db,
+        );
+        let before = self.s.volume_db;
+        hifi::hslider(
+            ui,
+            vol,
+            Id::new("volume"),
+            t,
+            &mut self.s.volume_db,
+            &VOLUME,
+        )
+        .on_hover_text(if self.s.volume_db >= 0.0 {
+            "Volume: full. At full volume the samples are left untouched.".to_string()
+        } else {
+            format!("Volume: {:.1} dB", self.s.volume_db)
+        });
+        if self.s.volume_db != before {
+            self.engine.send(Cmd::Gain(db_to_gain(self.s.volume_db)));
+        }
+
+        let pos = Rect::from_min_max(
+            Pos2::new(x0 + 312.0, cy - 9.0),
+            Pos2::new(vol.left() - 108.0, cy + 9.0),
+        );
+        self.position(ui, pos, t);
+    }
+
+    fn position(&mut self, ui: &mut Ui, r: Rect, t: &Tokens) {
+        let np = self.now_playing().map(|(i, secs, m)| (i, secs, m.clone()));
+        let len = np.as_ref().and_then(|(i, _, m)| {
+            m.info
+                .seconds()
+                .or_else(|| self.rows.get(*i).and_then(Row::seconds))
+        });
+        let secs = np.as_ref().map(|(_, s, _)| *s).unwrap_or(0.0);
+        let resp = ui.interact(
+            r.expand2(Vec2::new(6.0, 8.0)),
+            Id::new("seek"),
+            Sense::click_and_drag(),
+        );
+        let frac_at = |x: f32| ((x - r.left()) / r.width()).clamp(0.0, 1.0);
+        if let (Some(l), Some(pos)) = (len, resp.interact_pointer_pos()) {
+            if resp.dragged() || resp.is_pointer_button_down_on() {
+                self.seeking = Some(frac_at(pos.x));
+            }
+            if resp.drag_stopped() || resp.clicked() {
+                let f = frac_at(pos.x) as f64;
+                self.engine.send(Cmd::Seek((f * l).min((l - 0.5).max(0.0))));
+                self.seeking = None;
+            }
+        }
+        if !resp.is_pointer_button_down_on() && !resp.dragged() {
+            self.seeking = None;
+        }
+        if resp.hovered() && len.is_some() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        let shown = match (self.seeking, len) {
+            (Some(f), Some(_)) => f,
+            (_, Some(l)) if l > 0.0 => (secs / l).clamp(0.0, 1.0) as f32,
+            _ => 0.0,
+        };
         let p = ui.painter();
-        if let Some((m, at)) = &self.message {
-            if t - at < 12.0 {
-                fit(
-                    p,
-                    Pos2::new(panel.left() + 22.0, y),
-                    Align2::LEFT_CENTER,
-                    m,
-                    font(F_LEGEND, 13.0),
-                    th.legend,
-                    panel.width() * 0.62,
+        let track = Rect::from_center_size(r.center(), Vec2::new(r.width(), 6.0));
+        p.rect_filled(track, CornerRadius::same(3), t.groove);
+        let x = r.left() + r.width() * shown;
+        p.rect_filled(
+            Rect::from_min_max(track.min, Pos2::new(x, track.bottom())),
+            CornerRadius::same(3),
+            t.accent,
+        );
+        if len.is_some() {
+            let c = Pos2::new(x, r.center().y);
+            p.circle_filled(c + Vec2::new(0.0, 1.0), 8.0, Color32::from_black_alpha(64));
+            p.circle_filled(c, 8.0, t.thumb);
+        }
+        let shown_secs = match (self.seeking, len) {
+            (Some(f), Some(l)) => f as f64 * l,
+            _ => secs,
+        };
+        hifi::label(
+            p,
+            Pos2::new(r.left() - 14.0, r.center().y),
+            Align2::RIGHT_CENTER,
+            &if np.is_some() {
+                time_label(shown_secs)
+            } else {
+                "-:--".into()
+            },
+            hifi::num(12.0),
+            t.dim,
+        );
+        hifi::label(
+            p,
+            Pos2::new(r.right() + 14.0, r.center().y),
+            Align2::LEFT_CENTER,
+            &len.map(time_label).unwrap_or_else(|| "-:--".into()),
+            hifi::num(12.0),
+            t.dim,
+        );
+    }
+
+    // ------------------------------------------------------------ settings
+
+    fn settings(&mut self, ctx: &egui::Context, t: &Tokens) {
+        let mut open = self.settings_open;
+        let mut look = self.s.finish;
+        let mut system_bar = self.s.system_title_bar;
+        let mut subfolders = self.s.subfolders;
+        let mut spectrum = self.s.spectrum;
+        let mut items = vec!["System default".to_string()];
+        items.extend(self.devices.iter().cloned());
+        let sel = self
+            .s
+            .device
+            .as_ref()
+            .and_then(|d| items.iter().position(|x| x == d))
+            .unwrap_or(0);
+        let mut device = None;
+        let mut out = self.output_line();
+        if let Some(d) = self.dropouts() {
+            out += &format!("\n{d}");
+        }
+        hifi::drawer(ctx, t, "Settings", &mut open, |ui| {
+            hifi::look_settings(ui, t, &mut look);
+
+            hifi::drawer_heading(ui, t, "Output");
+            let r = hifi::drawer_row(ui, t, "Play through", 220.0);
+            device = hifi::select(ui, r, "device", t, &items, sel);
+            ui.label(
+                egui::RichText::new(out)
+                    .font(hifi::ui_font(12.0))
+                    .color(t.dim),
+            );
+
+            hifi::drawer_heading(ui, t, "Playing");
+            for (label, id, v) in [
+                ("Include sub-folders", "subfolders", &mut subfolders),
+                ("Spectrum in the display", "spectrum", &mut spectrum),
+            ] {
+                let r = hifi::drawer_row(ui, t, label, 32.0);
+                let r = Rect::from_min_size(r.min + Vec2::new(0.0, 4.0), Vec2::new(32.0, 18.0));
+                if hifi::switch(ui, r, Id::new(id), t, *v).clicked() {
+                    *v = !*v;
+                }
+            }
+
+            hifi::drawer_heading(ui, t, "Window");
+            let r = hifi::drawer_row(ui, t, "Use the system title bar", 32.0);
+            let r = Rect::from_min_size(r.min + Vec2::new(0.0, 4.0), Vec2::new(32.0, 18.0));
+            if hifi::switch(ui, r, Id::new("system-bar"), t, system_bar).clicked() {
+                system_bar = !system_bar;
+            }
+
+            hifi::drawer_heading(ui, t, "Keys");
+            for (k, what) in [
+                ("Space", "Play or pause"),
+                ("Left, Right", "Back or forward 10 seconds"),
+                ("Shift+Left, Right", "Previous or next track"),
+                ("Up, Down", "Choose a track"),
+                ("Enter", "Play the chosen track"),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [130.0, 18.0],
+                        egui::Label::new(
+                            egui::RichText::new(k).font(hifi::num(12.0)).color(t.text),
+                        ),
+                    );
+                    ui.label(
+                        egui::RichText::new(what)
+                            .font(hifi::ui_font(12.5))
+                            .color(t.dim),
+                    );
+                });
+            }
+        });
+        self.settings_open = open;
+        self.s.finish = look;
+        self.s.subfolders = subfolders;
+        self.s.spectrum = spectrum;
+        if let Some(n) = device {
+            self.s.device = (n > 0).then(|| items[n].clone());
+            self.engine.send(Cmd::Device(self.s.device.clone()));
+            let t = ctx.input(|i| i.time);
+            self.tell(format!("Output: {}", items[n]), t);
+        }
+        if system_bar != self.s.system_title_bar {
+            self.s.system_title_bar = system_bar;
+            ctx.send_viewport_cmd(ViewportCommand::Decorations(system_bar));
+        }
+    }
+
+    fn fit_to_window(&self, ctx: &egui::Context) {
+        let zoom = ctx.zoom_factor();
+        let screen = ctx.content_rect().size() * zoom;
+        let want = (screen.x / MIN_DESIGN.x)
+            .min(screen.y / MIN_DESIGN.y)
+            .clamp(0.5, 1.0);
+        if (want - zoom).abs() > 0.002 {
+            ctx.set_zoom_factor(want);
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// "39 min", "1 h 12 min".
+fn duration_words(secs: f64) -> String {
+    let m = (secs / 60.0).round() as u64;
+    if m >= 60 {
+        format!("{} h {} min", m / 60, m % 60)
+    } else {
+        format!("{m} min")
+    }
+}
+
+/// A small outlined label for a format. Returns its width.
+fn chip(p: &egui::Painter, left_centre: Pos2, s: &str, t: &Tokens) -> f32 {
+    let g = p.layout_no_wrap(s.to_string(), hifi::ui_font(11.5), t.dim);
+    let r = Rect::from_min_size(
+        Pos2::new(left_centre.x, left_centre.y - 10.0),
+        Vec2::new(g.size().x + 14.0, 20.0),
+    );
+    p.rect_stroke(
+        r,
+        CornerRadius::same(5),
+        Stroke::new(1.0, t.line),
+        StrokeKind::Inside,
+    );
+    p.galley(
+        Pos2::new(r.left() + 7.0, r.center().y - g.size().y / 2.0),
+        g,
+        t.dim,
+    );
+    r.width()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Btn {
+    /// Just the icon, with a soft circle on hover.
+    Flat,
+    /// A raised round key.
+    Raised,
+    /// Filled with the accent: Play.
+    Primary,
+}
+
+#[derive(Clone, Copy)]
+enum Icon {
+    Shuffle,
+    Prev,
+    Play,
+    Pause,
+    Next,
+    Stop,
+}
+
+/// A round transport key with an icon.
+fn round_button(
+    ui: &mut Ui,
+    c: Pos2,
+    r: f32,
+    id: Id,
+    t: &Tokens,
+    kind: Btn,
+    icon: Icon,
+) -> Response {
+    let hit = Rect::from_center_size(c, Vec2::splat(r * 2.0));
+    let resp = ui
+        .interact(hit, id, Sense::click())
+        .on_hover_cursor(CursorIcon::PointingHand);
+    let p = ui.painter();
+    let down = resp.is_pointer_button_down_on();
+    let hover = resp.hovered() && !down;
+    let shade = |col: Color32, k: f32| {
+        let to = if t.dark {
+            Color32::WHITE
+        } else {
+            Color32::BLACK
+        };
+        taw_panel::theme::lerp_colour(col, to, k)
+    };
+    let fg = match kind {
+        Btn::Flat => {
+            if hover {
+                p.circle_filled(c, r, t.line_soft);
+            }
+            t.dim
+        }
+        Btn::Raised => {
+            p.circle_filled(c + Vec2::new(0.0, 1.5), r, Color32::from_black_alpha(36));
+            p.circle_filled(
+                c,
+                r,
+                if hover {
+                    shade(t.raised, 0.05)
+                } else {
+                    t.raised
+                },
+            );
+            p.circle_stroke(c, r, Stroke::new(1.0, t.line));
+            t.text
+        }
+        Btn::Primary => {
+            p.circle_filled(c + Vec2::new(0.0, 2.0), r, Color32::from_black_alpha(50));
+            p.circle_filled(
+                c,
+                r,
+                if hover {
+                    shade(t.accent, 0.08)
+                } else {
+                    t.accent
+                },
+            );
+            t.on_accent
+        }
+    };
+    if resp.has_focus() {
+        p.circle_stroke(c, r + 3.0, Stroke::new(2.0, t.accent));
+    }
+    draw_icon(
+        p,
+        c,
+        icon,
+        if kind == Btn::Primary { 10.0 } else { 7.0 },
+        fg,
+    );
+    resp
+}
+
+fn draw_icon(p: &egui::Painter, c: Pos2, icon: Icon, s: f32, col: Color32) {
+    let tri = |pts: Vec<Pos2>| Shape::convex_polygon(pts, col, Stroke::NONE);
+    match icon {
+        Icon::Play => {
+            p.add(tri(vec![
+                c + Vec2::new(-s * 0.55, -s),
+                c + Vec2::new(s * 0.95, 0.0),
+                c + Vec2::new(-s * 0.55, s),
+            ]));
+        }
+        Icon::Pause => {
+            for dx in [-0.5, 0.5] {
+                p.rect_filled(
+                    Rect::from_center_size(
+                        c + Vec2::new(dx * s, 0.0),
+                        Vec2::new(s * 0.42, s * 1.8),
+                    ),
+                    CornerRadius::same(1),
+                    col,
                 );
             }
         }
-        let mut right = match &self.output {
-            Some(o) => format!(
-                "{} · {} · {} · {} ch · {}",
-                o.host,
-                if o.device.starts_with("default") {
-                    "System default"
-                } else {
-                    &o.device
-                },
-                rate_label(o.rate),
-                o.channels,
-                o.format
-            ),
-            None => "Output closed".to_string(),
-        };
-        let drops = self
-            .engine
-            .shared
-            .underruns
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if drops > 0 {
-            right += &format!(" · {drops} dropout{}", if drops == 1 { "" } else { "s" });
+        Icon::Stop => {
+            p.rect_filled(
+                Rect::from_center_size(c, Vec2::splat(s * 1.4)),
+                CornerRadius::same(2),
+                col,
+            );
         }
-        fit(
-            p,
-            Pos2::new(panel.right() - 22.0, y),
-            Align2::RIGHT_CENTER,
-            &right,
-            font(F_LEGEND, 12.0),
-            th.legend_dim,
-            panel.width() * 0.34,
-        );
+        Icon::Prev | Icon::Next => {
+            let d = if matches!(icon, Icon::Next) {
+                1.0
+            } else {
+                -1.0
+            };
+            p.add(tri(vec![
+                c + Vec2::new(-s * 0.7 * d, -s * 0.85),
+                c + Vec2::new(s * 0.55 * d, 0.0),
+                c + Vec2::new(-s * 0.7 * d, s * 0.85),
+            ]));
+            p.rect_filled(
+                Rect::from_center_size(c + Vec2::new(s * 0.75 * d, 0.0), Vec2::new(2.2, s * 1.7)),
+                CornerRadius::same(1),
+                col,
+            );
+        }
+        Icon::Shuffle => {
+            let st = Stroke::new(1.8, col);
+            let (l, r) = (c.x - s, c.x + s * 0.7);
+            let (top, bot) = (c.y - s * 0.6, c.y + s * 0.6);
+            p.add(Shape::line(
+                vec![
+                    Pos2::new(l, top),
+                    Pos2::new(c.x - s * 0.3, top),
+                    Pos2::new(c.x + s * 0.3, bot),
+                    Pos2::new(r, bot),
+                ],
+                st,
+            ));
+            p.add(Shape::line(
+                vec![
+                    Pos2::new(l, bot),
+                    Pos2::new(c.x - s * 0.3, bot),
+                    Pos2::new(c.x + s * 0.3, top),
+                    Pos2::new(r, top),
+                ],
+                st,
+            ));
+            for y in [top, bot] {
+                p.add(tri(vec![
+                    Pos2::new(r + s * 0.55, y),
+                    Pos2::new(r - s * 0.05, y - s * 0.38),
+                    Pos2::new(r - s * 0.05, y + s * 0.38),
+                ]));
+            }
+        }
     }
 }
 
-fn key_label(a: App) -> &'static str {
-    match a {
-        App::Library => "Library",
-        App::Equaliser => "EQ",
-        App::Analyser => "Analyser",
-    }
-}
-
-fn set_visuals(ctx: &egui::Context, th: &Theme) {
-    let mut v = if th.silver {
-        egui::Visuals::light()
+/// A small loudspeaker, with waves for the volume.
+fn speaker(p: &egui::Painter, c: Pos2, col: Color32, db: f32) {
+    p.add(Shape::convex_polygon(
+        vec![
+            c + Vec2::new(-7.0, -3.0),
+            c + Vec2::new(-3.5, -3.0),
+            c + Vec2::new(1.0, -7.0),
+            c + Vec2::new(1.0, 7.0),
+            c + Vec2::new(-3.5, 3.0),
+            c + Vec2::new(-7.0, 3.0),
+        ],
+        col,
+        Stroke::NONE,
+    ));
+    let waves = if db > -1.0 {
+        2
+    } else if db > -30.0 {
+        1
     } else {
-        egui::Visuals::dark()
+        0
     };
-    v.panel_fill = th.panel;
-    v.extreme_bg_color = LCD_BG;
-    v.selection.bg_fill = LCD_DIM;
-    v.selection.stroke = Stroke::new(1.0, LCD_INK);
-    v.text_cursor.stroke = Stroke::new(2.0, LCD_INK);
-    if ctx.global_style().visuals != v {
-        ctx.set_visuals(v);
+    for w in 0..waves {
+        let rad = 5.0 + w as f32 * 4.0;
+        let pts: Vec<Pos2> = (0..=8)
+            .map(|k| {
+                let a = -0.8 + 1.6 * k as f32 / 8.0;
+                c + Vec2::new(1.5 + a.cos() * rad, a.sin() * rad)
+            })
+            .collect();
+        p.add(Shape::line(pts, Stroke::new(1.5, col)));
     }
 }
 
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
-        // Never larger than designed: on a big window the playlist gets the room.
-        fit_to_window(ui.ctx(), DESIGN, 1.0);
-        let th = Theme::panel(self.s.panel);
-        set_visuals(ui.ctx(), &th);
+        let ctx = ui.ctx().clone();
+        self.fit_to_window(&ctx);
+        let t = Tokens::from_ctx(&ctx, &self.s.finish);
+        hifi::apply_visuals(&ctx, &t);
         self.poll(ui);
-        self.keys(ui);
-
-        let panel = ui.max_rect();
-        draw_panel_bg(ui.painter(), panel, &th);
-        self.top_strip(ui, panel, &th);
-        stripe(
-            ui.painter(),
-            Rect::from_min_size(
-                panel.min + Vec2::new(22.0, 112.0),
-                Vec2::new(panel.width() - 44.0, 6.0),
-            ),
-        );
-        let body = Rect::from_min_max(
-            panel.min + Vec2::new(22.0, TOP_ROW),
-            panel.max - Vec2::new(22.0, 44.0),
-        );
-        let left = Rect::from_min_size(body.min, Vec2::new(LEFT_W, body.height()));
-        self.left(ui, left, &th);
-        let mut right = Rect::from_min_max(Pos2::new(left.right() + 26.0, body.top()), body.max);
-        if self.s.spectrum {
-            let sp = Rect::from_min_size(right.min, Vec2::new(right.width(), 132.0));
-            self.spectrum_strip(ui, sp);
-            right.min.y = sp.bottom() + 16.0;
+        if !self.settings_open {
+            self.keys(ui);
         }
-        self.playlist(ui, right, &th);
-        self.footer(ui, panel, &th);
+
+        let screen = ui.max_rect();
+        hifi::faceplate(ui.painter(), screen, &t);
+        self.plate(ui, screen, &t);
+        let bar = Rect::from_min_max(
+            Pos2::new(screen.left(), screen.bottom() - BAR_H),
+            screen.max,
+        );
+        self.transport(ui, bar, &t);
+        // The bar covers the faceplate's edge; draw the window's outline
+        // over both.
+        ui.painter()
+            .rect_stroke(screen, 0, Stroke::new(1.0, t.edge), StrokeKind::Inside);
+
+        let body = Rect::from_min_max(
+            Pos2::new(screen.left() + 24.0, screen.top() + PLATE_H + 8.0),
+            Pos2::new(screen.right() - 24.0, bar.top() - 22.0),
+        );
+        // The artwork is as big as the height allows, within reason.
+        let left_w = (body.height() - 170.0).clamp(240.0, 400.0);
+        let left = Rect::from_min_size(body.min, Vec2::new(left_w, body.height()));
+        self.left(ui, left, &t);
+        let mut right = Rect::from_min_max(Pos2::new(left.right() + 28.0, body.top()), body.max);
+        if !self.s.simple {
+            let d = Rect::from_min_size(right.min, Vec2::new(right.width(), DISPLAY_H));
+            self.display(ui, d, &t);
+            right.min.y = d.bottom() + 14.0;
+        }
+        let tools = Rect::from_min_size(right.min, Vec2::new(right.width(), 30.0));
+        self.toolbar(ui, tools, &t);
+        right.min.y = tools.bottom() + 10.0;
+        self.playlist(ui, right, &t);
+
+        self.settings(&ctx, &t);
+        if !self.s.system_title_bar {
+            hifi::resize_edges(ui, screen);
+        }
 
         if self.state() == State::Playing || self.seeking.is_some() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(30));
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
         } else {
             // Keep checking for hand-overs from the Library.
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(500));
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
     }
 
@@ -1587,6 +1957,12 @@ impl eframe::App for PlayerApp {
         if let Some(b) = &self.beacon {
             b.leave();
         }
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        Tokens::new(&self.s.finish, false)
+            .face_bottom
+            .to_normalized_gamma_f32()
     }
 }
 
@@ -1602,6 +1978,8 @@ mod tests {
         assert_eq!(rate_label(352_800), "352.8 kHz");
         assert_eq!(time_label(65.4), "1:05");
         assert_eq!(time_label(3725.0), "1:02:05");
+        assert_eq!(duration_words(39.0 * 60.0), "39 min");
+        assert_eq!(duration_words(72.0 * 60.0), "1 h 12 min");
         assert_eq!(db_to_gain(0.0), 1.0);
         assert!((db_to_gain(-6.0) - 0.501).abs() < 0.001);
     }
@@ -1611,5 +1989,17 @@ mod tests {
         let s: Saved = serde_json::from_str(r#"{"volume_db": -3.0}"#).unwrap();
         assert_eq!(s.volume_db, -3.0);
         assert!(s.subfolders);
+        assert!(!s.simple);
+        assert_eq!(s.finish, hifi::Look::default());
+    }
+
+    #[test]
+    fn settings_from_the_jupiter_panel_still_load() {
+        let s: Saved =
+            serde_json::from_str(r#"{"panel": "Silver", "volume_db": -6.0, "spectrum": false}"#)
+                .unwrap();
+        assert_eq!(s.volume_db, -6.0);
+        assert!(!s.spectrum);
+        assert!(!s.system_title_bar);
     }
 }

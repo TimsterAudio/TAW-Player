@@ -7,8 +7,8 @@ authors = ["Timster's Audio Works"]
 publish = false
 
 [dependencies]
-# 0.2.0, with the spectrum drawing and the analyser
-taw-panel = { git = "https://github.com/TimsterAudio/TAW-Panel", rev = "41a95d4513d93dfbf18803508065a8c0a168ec95", features = ["analyser"] }
+# 0.3.0: the TAW look (hifi), spectrum drawing and the analyser
+taw-panel = { git = "https://github.com/TimsterAudio/TAW-Panel", rev = "1b8162d75d10c41a8c9b021fc3d31e2a3311aeb6", features = ["analyser"] }
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "persistence", "wayland", "x11"] }
 egui = "0.36"
 cpal = "0.18"

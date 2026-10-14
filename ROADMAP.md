@@ -31,10 +31,11 @@ The Player is the native successor to Spool. This is where it stands against Spo
 - [x] Spectrum (new; from TAW-Panel)
 
 ### Looks and options
-- [x] Black / Silver panel (the family's version of Dark/Light)
+- [x] Black / Silver panel (the family's version of Dark/Light), replaced by the TAW look
+- [x] The TAW look: Spool or Porcelain, Light, Dark or Automatic, Spool's colour themes; Simple and Detailed; own title strip and window buttons
 - [ ] Retro (cassette deck) look, tape counter: waits for the skins work (TAW-Panel ROADMAP)
 - [x] Include sub-folders (setting kept; key to come)
-- [ ] Options panel: sub-folders, meter hold, VU reference
+- [ ] Options panel: sub-folders, meter hold, VU reference (Settings drawer has sub-folders and spectrum)
 - [ ] Activity log (opt-in, local JSON Lines file)
 
 ### Deliberately the same as Spool

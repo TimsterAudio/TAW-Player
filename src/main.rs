@@ -55,6 +55,9 @@ fn main() -> eframe::Result {
             .with_app_id("taw-player")
             .with_inner_size(app::DEFAULT_SIZE)
             .with_min_inner_size(egui::Vec2::new(640.0, 400.0))
+            // The Player draws its own title strip and window buttons;
+            // Settings can bring back the system's.
+            .with_decorations(false)
             .with_icon(icon::icon()),
         ..Default::default()
     };
