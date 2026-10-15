@@ -1,6 +1,6 @@
 # TAW Player
 
-**Timster's Audio Works – Player (PL-001) v0.1.0**: a native, gapless music player for Windows and Linux, in the TAW look shared with the Library, Equaliser and Analyser (Spool or Porcelain, light or dark). It's the native successor to Spool.
+**Timster's Audio Works – Player (PL-001) v0.2.0**: a native, gapless music player for Windows and Linux, in the TAW look shared with the Library, Equaliser and Analyser (Spool or Porcelain, light or dark). It's the native successor to Spool.
 
 ![The Player playing a test album](docs/screenshot.png)
 
@@ -10,13 +10,15 @@ It's a desktop program written in Rust (egui for the panel). It isn't an HTML pa
 
 ## What it does
 
-- **Plays folders, files and playlists.** Open a folder (with its sub-folders, in name order, so CD1 comes before CD2), pick files, open an M3U or M3U8 playlist, or drop any of them on the window. FLAC, MP3, WAV, AIFF, ALAC and AAC (M4A) and Ogg Vorbis.
+- **Plays folders, files and playlists.** Open a folder (with its sub-folders, in name order, so CD1 comes before CD2), pick files, open an M3U or M3U8 playlist, or drop any of them on the window. FLAC, MP3, WAV, AIFF, ALAC and AAC (M4A) and Ogg Vorbis. Opening fills the list and waits for Play; Settings has "Start playing when I open music" to play at once.
+- **Adds to the list.** **Add** puts files, a playlist or a folder at the end of the list instead of replacing it (or hold Shift as you drop). If the list is still playing, it carries on into them without a gap.
 - **Gapless.** The next track is decoded straight on from the last into one continuous stream, so tracks at the same sample rate join with no gap. MP3s with a LAME header have the encoder's delay and padding trimmed, as Spool did. Tested with sine waves cut into tracks at exact sample positions: the joins are seamless and the length is exact.
 - **Each track at its own sample rate, where the output allows it**, and it says plainly when it doesn't. Under the track a green light reads *Playing as recorded* (Simple) or *Native rate, untouched* (Detailed); an amber one reads *converted for this output* or *Resampled to 48 kHz for this output* when the output can't take the track's rate. A change of rate between albums reopens the output at the new rate (a short pause between them, not a resample).
 - **No false bit-perfect claims.** The Player can only speak for its own part of the path: at 0 dB volume and the native rate it passes the samples on untouched. What the system does after that is the system's business; see [Sample rates and "bit-perfect"](#sample-rates-and-bit-perfect).
 - **Tags and artwork**: title, artist and album from the file's tags (or its name), and the cover from a `cover`, `front`, `folder` or `album` JPEG or PNG in the track's folder (or a parent, up to the folder you opened), or the picture in the file.
 - **Simple and Detailed.** Simple shows the artwork, the track, the list and the transport, and says what's playing in plain words. Detailed adds the display window (time, LED meters and a spectrum) and the exact format, rate and output.
 - **The TAW look**: Spool's warm panels by default (Light, Amber), tinted by any of Spool's seven colour themes, or Porcelain; light, dark or following the computer. The Player draws its own title strip and window buttons; Settings can bring back the system's title bar.
+- **Media keys and the sound menu.** The keyboard's play, pause, next, previous and stop keys work, and the desktop's media controls (the sound menu on Linux, through MPRIS; the media overlay on Windows) show what's playing, with its artwork, and control it.
 - Volume, output device, look and the rest remembered between runs.
 
 ### Keys
@@ -28,6 +30,9 @@ It's a desktop program written in Rust (egui for the panel). It isn't an HTML pa
 | → / ← | Forward / back 10 seconds |
 | ↑ / ↓, Enter | Choose a track, play it |
 | Double-click a track | Play it |
+| Home | Back to the first track of the list |
+| Shift while dropping | Add to the list |
+| Media keys | Play/pause, next, previous, stop |
 | Click the display | Time elapsed or remaining |
 
 **Random** shuffles the list and plays it from the top, like Spool's random play.
@@ -45,6 +50,8 @@ From a terminal or another program:
 taw-player [--play] [FILE | FOLDER | PLAYLIST.m3u8 ...]
 ```
 
+With `--play` it plays them at once; without it, it follows the "Start playing when I open music" setting.
+
 ## Sample rates and "bit-perfect"
 
 The Player decodes every file at its own rate and never resamples unless it has to. Whether it has to depends on the output:
@@ -57,8 +64,7 @@ The Player decodes every file at its own rate and never resamples unless it has 
 
 - No exclusive mode (WASAPI) yet, and no ASIO.
 - AAC (M4A) tracks aren't trimmed of the encoder's delay, so an AAC album has a tiny gap at each join. FLAC, WAV, AIFF, ALAC and LAME-tagged MP3 are seamless.
-- No hardware media keys or system media controls yet.
-- No CUE sheets, no playlist editing (reorder, remove), no saving playlists, no "add to the list"; opening replaces the list.
+- No CUE sheets, no playlist editing (reorder, remove), no saving playlists.
 - Multichannel files are played as their first two channels on a stereo output (no downmix).
 - No VU meters or Retro look (Spool's) yet.
 
@@ -67,7 +73,7 @@ See [ROADMAP.md](ROADMAP.md) for the full list against Spool.
 ## Where things are kept
 
 - Settings: eframe's usual place for an app called "TAW Player".
-- `%APPDATA%\Timster's Audio Works\Player` on Windows, `~/.local/share/timsters-audio-works/player` on Linux: the files that let a second launch hand its files to the running Player. Nothing else is written, and the Player never changes your music.
+- `%APPDATA%\Timster's Audio Works\Player` on Windows, `~/.local/share/timsters-audio-works/player` on Linux: the files that let a second launch hand its files to the running Player, and (in `now-playing`) a copy of the playing track's embedded artwork for the desktop's media controls, which can only show a picture from a file. Nothing else is written, and the Player never changes your music.
 
 ## Building
 

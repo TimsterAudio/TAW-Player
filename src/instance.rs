@@ -3,6 +3,7 @@
 //! already running and exits. It's done with files in the Player's data
 //! folder, not a socket, so nothing listens on the network.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -31,6 +32,24 @@ fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
+/// A list handed from one launch to the running Player.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct Handover {
+    pub paths: Vec<PathBuf>,
+    /// `--play`: play it now, whatever the setting says.
+    pub play: bool,
+}
+
+impl Handover {
+    fn parse(text: &str) -> Option<Handover> {
+        serde_json::from_str(text).ok().or_else(|| {
+            // 0.1.0 wrote just the list, and always played it.
+            let paths = serde_json::from_str::<Vec<PathBuf>>(text).ok()?;
+            Some(Handover { paths, play: true })
+        })
+    }
+}
+
 /// The running Player's mark: its process id and when it last checked in.
 pub struct Beacon {
     dir: PathBuf,
@@ -52,7 +71,7 @@ impl Beacon {
 
     /// Lists handed over by later launches, oldest first, each removed as
     /// it's read.
-    pub fn take_inbox(&self) -> Vec<Vec<PathBuf>> {
+    pub fn take_inbox(&self) -> Vec<Handover> {
         let Ok(rd) = std::fs::read_dir(self.dir.join("inbox")) else {
             return Vec::new();
         };
@@ -67,7 +86,7 @@ impl Beacon {
             .filter_map(|p| {
                 let text = std::fs::read_to_string(&p).ok();
                 let _ = std::fs::remove_file(&p);
-                serde_json::from_str::<Vec<PathBuf>>(&text?).ok()
+                Handover::parse(&text?)
             })
             .collect()
     }
@@ -88,9 +107,9 @@ fn other_running(dir: &Path) -> bool {
     pid != std::process::id() && now_ms().saturating_sub(at) < 3_000
 }
 
-/// Gives `paths` to a Player that's already running. True if it took them
+/// Gives `paths` (to play now if `play`) to a Player that's already running. True if it took them
 /// (this launch can then exit).
-pub fn hand_over(dir: &Path, paths: &[PathBuf]) -> bool {
+pub fn hand_over(dir: &Path, paths: &[PathBuf], play: bool) -> bool {
     if paths.is_empty() || !other_running(dir) {
         return false;
     }
@@ -98,7 +117,10 @@ pub fn hand_over(dir: &Path, paths: &[PathBuf]) -> bool {
     let _ = std::fs::create_dir_all(&inbox);
     let file = inbox.join(format!("{}-{}.json", now_ms(), std::process::id()));
     let tmp = file.with_extension("tmp");
-    let Ok(json) = serde_json::to_string(paths) else {
+    let Ok(json) = serde_json::to_string(&Handover {
+        paths: paths.to_vec(),
+        play,
+    }) else {
         return false;
     };
     if std::fs::write(&tmp, json).is_err() || std::fs::rename(&tmp, &file).is_err() {
@@ -126,13 +148,28 @@ mod tests {
         // Our own beacon doesn't count as another Player.
         b.beat();
         assert!(!other_running(&d));
-        assert!(!hand_over(&d, &[PathBuf::from("/x.flac")]));
-        // A list dropped in the inbox comes out once.
-        std::fs::write(d.join("inbox/1-1.json"), r#"["/a.flac","/b"]"#).unwrap();
+        assert!(!hand_over(&d, &[PathBuf::from("/x.flac")], true));
+        // A list dropped in the inbox comes out once, with or without
+        // --play; one from 0.1.0 (just the list) plays.
+        std::fs::write(
+            d.join("inbox/1-1.json"),
+            r#"{"paths":["/a.flac"],"play":false}"#,
+        )
+        .unwrap();
+        std::fs::write(d.join("inbox/2-1.json"), r#"["/a.flac","/b"]"#).unwrap();
         let got = b.take_inbox();
         assert_eq!(
             got,
-            vec![vec![PathBuf::from("/a.flac"), PathBuf::from("/b")]]
+            vec![
+                Handover {
+                    paths: vec![PathBuf::from("/a.flac")],
+                    play: false
+                },
+                Handover {
+                    paths: vec![PathBuf::from("/a.flac"), PathBuf::from("/b")],
+                    play: true
+                }
+            ]
         );
         assert!(b.take_inbox().is_empty());
         // Another Player's fresh beacon does count; a stale one doesn't.

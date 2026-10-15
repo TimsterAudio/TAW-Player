@@ -6,6 +6,7 @@
 use crate::engine::{locate, Cmd, Engine, Mark, OutputInfo};
 use crate::family::{self, App};
 use crate::instance::{self, Beacon};
+use crate::media::{self, Media};
 use crate::playlist::{self, Entry};
 use crate::tags::{self, ArtLoader, TagReader, Tags};
 use egui::{
@@ -56,6 +57,9 @@ struct Saved {
     simple: bool,
     /// Use the system's title bar instead of the Player's own.
     system_title_bar: bool,
+    /// Opening music (a folder, files, a drop) starts it playing. Off: the
+    /// list fills and waits. `--play` (the Library) always plays.
+    play_on_open: bool,
 }
 
 impl Default for Saved {
@@ -72,6 +76,7 @@ impl Default for Saved {
             finish: hifi::Look::default(),
             simple: false,
             system_title_bar: false,
+            play_on_open: false,
         }
     }
 }
@@ -184,6 +189,8 @@ pub struct PlayerApp {
     /// it asks where the app is.
     locate: Option<(App, f64)>,
     settings_open: bool,
+    /// Media keys and the desktop's media controls, if there are any.
+    media: Option<Media>,
 }
 
 fn now(ui: &Ui) -> f64 {
@@ -218,7 +225,7 @@ fn db_to_gain(db: f32) -> f32 {
 }
 
 impl PlayerApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, open: Vec<PathBuf>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, open: Vec<PathBuf>, play: bool) -> Self {
         hifi::install_fonts(&cc.egui_ctx);
         let s: Saved = cc
             .storage
@@ -262,6 +269,7 @@ impl PlayerApp {
             found: HashMap::new(),
             locate: None,
             settings_open: false,
+            media: Media::start(cc.egui_ctx.clone(), window_handle(cc)),
         };
         if app.s.system_title_bar {
             cc.egui_ctx
@@ -269,7 +277,8 @@ impl PlayerApp {
         }
         app.refresh_family();
         if !open.is_empty() {
-            app.load(&open, true, 0.0);
+            let play = play || app.s.play_on_open;
+            app.load(&open, play, 0.0);
         }
         app
     }
@@ -342,7 +351,7 @@ impl PlayerApp {
             d = d.set_directory(dir);
         }
         if let Some(dir) = d.pick_folder() {
-            self.load(&[dir], true, t);
+            self.load(&[dir], self.s.play_on_open, t);
         }
     }
 
@@ -356,7 +365,68 @@ impl PlayerApp {
             d = d.set_directory(dir);
         }
         if let Some(files) = d.pick_files() {
-            self.load(&files, true, t);
+            self.load(&files, self.s.play_on_open, t);
+        }
+    }
+
+    /// Adds folders, files or playlists to the end of the list. If the
+    /// list is still playing, it plays on into them without a gap.
+    fn add(&mut self, paths: &[PathBuf], t: f64) {
+        if self.rows.is_empty() {
+            self.load(paths, self.s.play_on_open, t);
+            return;
+        }
+        let opened = playlist::expand(paths, self.s.subfolders);
+        if opened.tracks.is_empty() {
+            self.tell("Nothing there the Player can play.", t);
+            return;
+        }
+        if let Some(d) = paths.first().and_then(|p| {
+            if p.is_dir() {
+                Some(p.clone())
+            } else {
+                p.parent().map(Path::to_path_buf)
+            }
+        }) {
+            self.s.last_dir = Some(d);
+        }
+        let first = self.rows.len();
+        let n = opened.tracks.len();
+        let list: Vec<PathBuf> = opened.tracks.iter().map(|e| e.path.clone()).collect();
+        for (k, p) in list.iter().enumerate() {
+            self.tag_reader
+                .request_one(self.generation, first + k, p.clone());
+        }
+        self.rows.extend(opened.tracks.into_iter().map(Row::new));
+        self.engine.send(Cmd::Append(list));
+        let mut msg = format!("Added {n} track{}", if n == 1 { "" } else { "s" });
+        if opened.missing > 0 {
+            msg += &format!(" ({} in the playlist couldn't be found)", opened.missing);
+        }
+        self.tell(msg, t);
+    }
+
+    fn add_folder(&mut self, t: f64) {
+        let mut d = rfd::FileDialog::new().set_title("Add a folder of music to the list");
+        if let Some(dir) = &self.s.last_dir {
+            d = d.set_directory(dir);
+        }
+        if let Some(dir) = d.pick_folder() {
+            self.add(&[dir], t);
+        }
+    }
+
+    fn add_files(&mut self, t: f64) {
+        let mut exts: Vec<&str> = playlist::AUDIO.to_vec();
+        exts.extend(["m3u", "m3u8"]);
+        let mut d = rfd::FileDialog::new()
+            .set_title("Add music files or a playlist to the list")
+            .add_filter("Music and playlists", &exts);
+        if let Some(dir) = &self.s.last_dir {
+            d = d.set_directory(dir);
+        }
+        if let Some(files) = d.pick_files() {
+            self.add(&files, t);
         }
     }
 
@@ -395,6 +465,20 @@ impl PlayerApp {
         self.engine.send(Cmd::Queue(list));
         self.engine.send(Cmd::Play(0));
         self.selected = Some(0);
+        self.scroll_to = Some(0);
+    }
+
+    /// Spool's back-to-start key: the first track of the list. Playing, it
+    /// plays it; stopped, it chooses it.
+    fn back_to_start(&mut self) {
+        if self.rows.is_empty() {
+            return;
+        }
+        if self.state() == State::Stopped {
+            self.selected = Some(0);
+        } else {
+            self.play(0);
+        }
         self.scroll_to = Some(0);
     }
 
@@ -547,8 +631,9 @@ impl PlayerApp {
             if t - self.last_inbox > 0.5 {
                 self.last_inbox = t;
                 let lists = b.take_inbox();
-                if let Some(paths) = lists.into_iter().last() {
-                    self.load(&paths, true, t);
+                if let Some(h) = lists.into_iter().last() {
+                    let play = h.play || self.s.play_on_open;
+                    self.load(&h.paths, play, t);
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
             }
@@ -564,7 +649,12 @@ impl PlayerApp {
                 .collect()
         });
         if !dropped.is_empty() {
-            self.load(&dropped, true, t);
+            // Shift while dropping adds to the list.
+            if ui.input(|i| i.modifiers.shift) {
+                self.add(&dropped, t);
+            } else {
+                self.load(&dropped, self.s.play_on_open, t);
+            }
         }
 
         // Meters: instant rise, a steady fall; at rest when paused.
@@ -581,6 +671,8 @@ impl PlayerApp {
             };
         }
 
+        self.media_keys(ui);
+
         // Follow the playing track, unless the list was just scrolled.
         let idx = self.now_playing().map(|(i, _, _)| i);
         if idx != self.last_index {
@@ -594,11 +686,56 @@ impl PlayerApp {
         }
     }
 
+    /// The keyboard's media keys and the desktop's sound menu; and telling
+    /// the desktop what's playing.
+    fn media_keys(&mut self, ui: &Ui) {
+        let Some(m) = &self.media else { return };
+        for k in m.keys() {
+            let state = self.state();
+            match k {
+                media::Key::Play if state != State::Playing => self.play_pause(),
+                media::Key::Pause if state == State::Playing => self.play_pause(),
+                media::Key::Toggle => self.play_pause(),
+                media::Key::Next => self.next(),
+                media::Key::Previous => self.previous(),
+                media::Key::Stop => self.engine.send(Cmd::Stop),
+                media::Key::SeekBy(d) => self.seek_by(d),
+                media::Key::SeekTo(secs) => {
+                    if state != State::Stopped {
+                        self.engine.send(Cmd::Seek(secs.max(0.0)));
+                    }
+                }
+                media::Key::Raise => ui.ctx().send_viewport_cmd(ViewportCommand::Focus),
+                _ => {}
+            }
+        }
+        let np = self.now_playing().map(|(i, secs, m)| (i, secs, m.clone()));
+        let track = np.as_ref().and_then(|(i, _, m)| {
+            let r = self.rows.get(*i)?;
+            Some(media::Track {
+                path: r.path.clone(),
+                title: r.title(),
+                artist: Some(r.artist()).filter(|a| !a.is_empty()),
+                album: Some(r.album()).filter(|a| !a.is_empty()),
+                seconds: m.info.seconds().or_else(|| r.seconds()),
+            })
+        });
+        let playback = match (self.state(), &np) {
+            (State::Playing, Some((_, secs, _))) => media::Playback::Playing(*secs),
+            (State::Paused, Some((_, secs, _))) => media::Playback::Paused(*secs),
+            _ => media::Playback::Stopped,
+        };
+        let root = self.root.clone();
+        if let Some(m) = self.media.as_mut() {
+            m.update(track, playback, root.as_deref());
+        }
+    }
+
     fn keys(&mut self, ui: &Ui) {
         if ui.ctx().egui_wants_keyboard_input() {
             return;
         }
-        let (space, next, prev, fwd, back, up, down, enter) = ui.input_mut(|i| {
+        let (space, next, prev, fwd, back, up, down, enter, home) = ui.input_mut(|i| {
             let shift = egui::Modifiers::SHIFT;
             (
                 i.consume_key(egui::Modifiers::NONE, Key::Space),
@@ -609,8 +746,12 @@ impl PlayerApp {
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowUp),
                 i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
                 i.consume_key(egui::Modifiers::NONE, Key::Enter),
+                i.consume_key(egui::Modifiers::NONE, Key::Home),
             )
         });
+        if home {
+            self.back_to_start();
+        }
         if space {
             self.play_pause();
         }
@@ -1072,11 +1213,19 @@ impl PlayerApp {
             t.ink_faint(0.7),
         );
 
-        // Meters, and the spectrum under them.
+        // Meters with their dB scale, and the spectrum under them. With the
+        // spectrum off, the meters sit in the middle of the display.
         let mx = rect.left() + 250.0;
         let mw = rect.right() - 20.0 - mx;
+        // Two meters 16 apart, then the scale's 12.
+        const METERS_H: f32 = 10.0 + 16.0 + 12.0;
+        let top = if self.s.spectrum {
+            rect.top() + 20.0
+        } else {
+            (rect.center().y - METERS_H / 2.0).round()
+        };
         for (c, s) in ["L", "R"].iter().enumerate() {
-            let y = rect.top() + 20.0 + c as f32 * 16.0;
+            let y = top + c as f32 * 16.0;
             hifi::label(
                 p,
                 Pos2::new(mx - 14.0, y + 5.0),
@@ -1085,16 +1234,15 @@ impl PlayerApp {
                 hifi::num(10.0),
                 t.ink_faint(0.7),
             );
-            hifi::meter(
-                p,
-                Rect::from_min_size(Pos2::new(mx, y), Vec2::new(mw, 10.0)),
-                t,
-                self.meter_db[c],
-            );
+            let r = Rect::from_min_size(Pos2::new(mx, y), Vec2::new(mw, 10.0));
+            hifi::meter(p, r, t, self.meter_db[c]);
+            if c == 1 {
+                hifi::meter_scale(p, r, t);
+            }
         }
         if self.s.spectrum && self.state() == State::Playing {
             let sp = Rect::from_min_max(
-                Pos2::new(mx, rect.top() + 58.0),
+                Pos2::new(mx, top + METERS_H + 6.0),
                 Pos2::new(rect.right() - 20.0, rect.bottom() - 14.0),
             );
             self.spectrum_bars(p, sp, t);
@@ -1131,19 +1279,50 @@ impl PlayerApp {
         let now = now(ui);
         let mut x = rect.left();
         let y = rect.center().y;
-        for (id, s) in [
-            ("folder", "Open folder"),
-            ("files", "Open files"),
-            ("clear", "Clear"),
+        for (id, s, tip) in [
+            (
+                "folder",
+                "Open folder",
+                "Open a folder in place of the list",
+            ),
+            (
+                "files",
+                "Open files",
+                "Open files or a playlist in place of the list",
+            ),
+            (
+                "add",
+                "Add",
+                "Add files or a folder to the end of the list (or hold Shift as you drop)",
+            ),
+            ("clear", "Clear", "Empty the list"),
         ] {
             let w = hifi::button_width(ui, s);
             let r = Rect::from_min_size(Pos2::new(x, y - 14.0), Vec2::new(w, 28.0));
-            if hifi::button(ui, r, Id::new(id), t, s, false).clicked() {
-                match id {
-                    "folder" => self.open_folder(now),
-                    "files" => self.open_files(now),
-                    _ => self.clear(),
+            let resp = hifi::button(ui, r, Id::new(id), t, s, false).on_hover_text(tip);
+            match id {
+                "folder" if resp.clicked() => self.open_folder(now),
+                "files" if resp.clicked() => self.open_files(now),
+                "clear" if resp.clicked() => self.clear(),
+                "add" => {
+                    let mut pick = None;
+                    egui::Popup::menu(&resp).gap(4.0).show(|ui| {
+                        ui.style_mut().override_font_id = Some(hifi::ui_font(13.0));
+                        ui.style_mut().spacing.button_padding = Vec2::new(10.0, 6.0);
+                        if ui.button("Add files or a playlist…").clicked() {
+                            pick = Some(false);
+                        }
+                        if ui.button("Add a folder…").clicked() {
+                            pick = Some(true);
+                        }
+                    });
+                    match pick {
+                        Some(true) => self.add_folder(now),
+                        Some(false) => self.add_files(now),
+                        None => {}
+                    }
                 }
+                _ => {}
             }
             x += w + 8.0;
         }
@@ -1396,7 +1575,15 @@ impl PlayerApp {
                 "Random: shuffle the list and play it",
             ),
             (
-                62.0,
+                60.0,
+                18.0,
+                Btn::Flat,
+                Icon::ToStart,
+                "start",
+                "Back to the start of the list (Home)",
+            ),
+            (
+                106.0,
                 21.0,
                 Btn::Raised,
                 Icon::Prev,
@@ -1404,7 +1591,7 @@ impl PlayerApp {
                 "Previous (Shift+Left)",
             ),
             (
-                120.0,
+                164.0,
                 29.0,
                 Btn::Primary,
                 if state == State::Playing {
@@ -1416,14 +1603,14 @@ impl PlayerApp {
                 "Play or pause (Space)",
             ),
             (
-                178.0,
+                222.0,
                 21.0,
                 Btn::Raised,
                 Icon::Next,
                 "next",
                 "Next (Shift+Right)",
             ),
-            (222.0, 18.0, Btn::Flat, Icon::Stop, "stop", "Stop"),
+            (266.0, 18.0, Btn::Flat, Icon::Stop, "stop", "Stop"),
         ];
         for (dx, r, kind, icon, id, tip) in buttons {
             let c = Pos2::new(x0 + dx, cy);
@@ -1433,6 +1620,7 @@ impl PlayerApp {
             {
                 match id {
                     "random" => self.random(),
+                    "start" => self.back_to_start(),
                     "prev" => self.previous(),
                     "play" => self.play_pause(),
                     "next" => self.next(),
@@ -1472,7 +1660,7 @@ impl PlayerApp {
         }
 
         let pos = Rect::from_min_max(
-            Pos2::new(x0 + 312.0, cy - 9.0),
+            Pos2::new(x0 + 356.0, cy - 9.0),
             Pos2::new(vol.left() - 108.0, cy + 9.0),
         );
         self.position(ui, pos, t);
@@ -1561,6 +1749,7 @@ impl PlayerApp {
         let mut system_bar = self.s.system_title_bar;
         let mut subfolders = self.s.subfolders;
         let mut spectrum = self.s.spectrum;
+        let mut play_on_open = self.s.play_on_open;
         let mut items = vec!["System default".to_string()];
         items.extend(self.devices.iter().cloned());
         let sel = self
@@ -1588,6 +1777,11 @@ impl PlayerApp {
 
             hifi::drawer_heading(ui, t, "Playing");
             for (label, id, v) in [
+                (
+                    "Start playing when I open music",
+                    "play-on-open",
+                    &mut play_on_open,
+                ),
                 ("Include sub-folders", "subfolders", &mut subfolders),
                 ("Spectrum in the display", "spectrum", &mut spectrum),
             ] {
@@ -1612,6 +1806,8 @@ impl PlayerApp {
                 ("Shift+Left, Right", "Previous or next track"),
                 ("Up, Down", "Choose a track"),
                 ("Enter", "Play the chosen track"),
+                ("Home", "Back to the start of the list"),
+                ("Shift+drop", "Add to the list"),
             ] {
                 ui.horizontal(|ui| {
                     ui.add_sized(
@@ -1632,6 +1828,7 @@ impl PlayerApp {
         self.s.finish = look;
         self.s.subfolders = subfolders;
         self.s.spectrum = spectrum;
+        self.s.play_on_open = play_on_open;
         if let Some(n) = device {
             self.s.device = (n > 0).then(|| items[n].clone());
             self.engine.send(Cmd::Device(self.s.device.clone()));
@@ -1654,6 +1851,26 @@ impl PlayerApp {
             ctx.set_zoom_factor(want);
             ctx.request_repaint();
         }
+    }
+}
+
+/// The window, for the media controls on Windows (they belong to a window
+/// there). Elsewhere they don't need one.
+fn window_handle(cc: &eframe::CreationContext<'_>) -> Option<*mut std::ffi::c_void> {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        if let Ok(h) = cc.window_handle() {
+            if let RawWindowHandle::Win32(w) = h.as_raw() {
+                return Some(w.hwnd.get() as *mut std::ffi::c_void);
+            }
+        }
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cc;
+        None
     }
 }
 
@@ -1701,6 +1918,7 @@ enum Btn {
 #[derive(Clone, Copy)]
 enum Icon {
     Shuffle,
+    ToStart,
     Prev,
     Play,
     Pause,
@@ -1826,6 +2044,21 @@ fn draw_icon(p: &egui::Painter, c: Pos2, icon: Icon, s: f32, col: Color32) {
                 CornerRadius::same(1),
                 col,
             );
+        }
+        Icon::ToStart => {
+            // A bar, then two triangles pointing back to it: |◀◀
+            p.rect_filled(
+                Rect::from_center_size(c + Vec2::new(-s * 0.95, 0.0), Vec2::new(2.0, s * 1.5)),
+                CornerRadius::same(1),
+                col,
+            );
+            for dx in [-0.75, 0.05] {
+                p.add(tri(vec![
+                    c + Vec2::new(dx * s, 0.0),
+                    c + Vec2::new((dx + 0.8) * s, -s * 0.72),
+                    c + Vec2::new((dx + 0.8) * s, s * 0.72),
+                ]));
+            }
         }
         Icon::Shuffle => {
             let st = Stroke::new(1.8, col);
