@@ -27,15 +27,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_SIZE: Vec2 = Vec2::new(1280.0, 800.0);
 /// Below this size the panel scales down; above it the list gets the room.
 const MIN_DESIGN: Vec2 = Vec2::new(1180.0, 720.0);
-const PLATE_H: f32 = 76.0;
+const PLATE_H: f32 = 66.0;
 /// The middle of the nameplate's row of keys (family, view, settings, and
-/// the list's keys over the right column).
-const ROW_Y: f32 = 52.0;
+/// the list's keys over the right column), just under the window buttons.
+const ROW_Y: f32 = 46.0;
 /// Under the artwork: the track, what's happening to it, and the list's
 /// size or the latest message.
-const UNDER_ART: f32 = 220.0;
+const UNDER_ART: f32 = 230.0;
 /// The artwork stops growing here.
-const ART_MAX: f32 = 800.0;
+const ART_MAX: f32 = 1000.0;
 const BAR_H: f32 = 96.0;
 const DISPLAY_H: f32 = 112.0;
 const ROW_H: f32 = 30.0;
@@ -68,6 +68,9 @@ struct Saved {
     /// Opening music (a folder, files, a drop) starts it playing. Off: the
     /// list fills and waits. `--play` (the Library) always plays.
     play_on_open: bool,
+    /// The meters in the classic green, yellow and red, or in the
+    /// display's own colour.
+    meter_colours: hifi::MeterColours,
 }
 
 impl Default for Saved {
@@ -85,6 +88,7 @@ impl Default for Saved {
             simple: false,
             system_title_bar: false,
             play_on_open: false,
+            meter_colours: hifi::MeterColours::Classic,
         }
     }
 }
@@ -904,22 +908,15 @@ impl PlayerApp {
         if !self.s.system_title_bar {
             hifi::drag_to_move(ui, plate);
         }
-        // The badge in the middle of the top edge; the logo up at the left.
-        hifi::badge(
-            ui.painter(),
-            Pos2::new(screen.center().x, screen.top() + 8.0),
-            t,
-            "Player",
-        );
-        hifi::logo(
+        hifi::nameplate(
             ui,
-            screen.min + Vec2::new(24.0, 16.0),
+            screen.min + Vec2::new(24.0, 10.0),
             t,
             "Player",
             &format!("PL-001 · Music player · V{VERSION}"),
         );
         if !self.s.system_title_bar {
-            hifi::window_buttons(ui, Pos2::new(screen.right() - 10.0, screen.top() + 10.0), t);
+            hifi::window_buttons(ui, Pos2::new(screen.right() - 10.0, screen.top() + 6.0), t);
         }
         let right = screen.right() - 24.0;
         let row = screen.top() + ROW_Y;
@@ -973,9 +970,6 @@ impl PlayerApp {
             .or(self.selected)
             .filter(|&i| i < self.rows.len());
 
-        // The list's size (or the latest message), along the bottom.
-        self.list_summary(ui, rect.left(), rect.bottom(), rect.width(), t);
-
         // Artwork.
         let art = Rect::from_min_size(rect.min, Vec2::splat(rect.width()));
         let tex = current.and_then(|i| {
@@ -989,11 +983,11 @@ impl PlayerApp {
                 let r = Rect::from_center_size(art.center(), s * scale);
                 ui.painter().rect_filled(
                     r.translate(Vec2::new(0.0, 3.0)),
-                    CornerRadius::same(10),
+                    CornerRadius::same(hifi::RADIUS + 2),
                     Color32::from_black_alpha(if t.dark { 70 } else { 28 }),
                 );
                 egui::Image::new((tex.id(), r.size()))
-                    .corner_radius(8)
+                    .corner_radius(hifi::RADIUS)
                     .paint_at(ui, r);
             }
             None => {
@@ -1088,10 +1082,10 @@ impl PlayerApp {
         }
         y += 82.0;
 
-        // What the file is, and what's being done to it.
-        if let Some((i, _, m)) = &np {
-            let simple = self.s.simple;
-            let (ok, path) = self.signal_path(*i, m, simple);
+        // What the file is, and what's being done to it: Detailed only.
+        // Simple shows the artwork and the track's names, nothing more.
+        if let (Some((i, _, m)), false) = (&np, self.s.simple) {
+            let (ok, path) = self.signal_path(*i, m, false);
             let p = ui.painter();
             // Resampling is worth knowing, not a fault: amber, not red.
             let light = if ok {
@@ -1099,18 +1093,7 @@ impl PlayerApp {
             } else {
                 Color32::from_rgb(0xe0, 0xa0, 0x30)
             };
-            if simple {
-                hifi::status_light(p, Pos2::new(x + 5.0, y + 9.0), light);
-                hifi::label_fit(
-                    p,
-                    Pos2::new(x + 18.0, y + 9.0),
-                    Align2::LEFT_CENTER,
-                    &path,
-                    hifi::ui_font(13.0),
-                    t.text,
-                    w - 18.0,
-                );
-            } else {
+            {
                 let (codec, fmt) = self.format_chips(*i, m);
                 hifi::status_light(p, Pos2::new(x + 5.0, y + 9.0), light);
                 let mut cx = x + 18.0;
@@ -1152,19 +1135,25 @@ impl PlayerApp {
                     t.dim,
                     w - 18.0,
                 );
+                y += 18.0;
                 if let Some(d) = self.dropouts() {
                     hifi::label_fit(
                         p,
-                        Pos2::new(x + 18.0, y + 27.0),
+                        Pos2::new(x + 18.0, y + 9.0),
                         Align2::LEFT_CENTER,
                         &d,
                         hifi::ui_font(11.5),
                         t.dim,
                         w - 18.0,
                     );
+                    y += 18.0;
                 }
+                y += 14.0;
             }
         }
+
+        // The list's size (or the latest message), under the rest.
+        self.list_summary(ui, x, y, w, t);
     }
 
     // ------------------------------------------------------------ display
@@ -1256,7 +1245,7 @@ impl PlayerApp {
                 t.ink_faint(0.7),
             );
             let r = Rect::from_min_size(Pos2::new(mx, y), Vec2::new(mw, 10.0));
-            hifi::meter(p, r, t, self.meter_db[c]);
+            hifi::meter_in(p, r, t, self.meter_db[c], self.s.meter_colours);
             if c == 1 {
                 hifi::meter_scale(p, r, t);
             }
@@ -1358,9 +1347,9 @@ impl PlayerApp {
             - 8.0
     }
 
-    /// Under the track: the list's size and length, or for a while after
-    /// something happens, what happened (up to two lines).
-    fn list_summary(&self, ui: &Ui, x: f32, bottom: f32, room: f32, t: &Tokens) {
+    /// Under the track: the list's size and length (Detailed), or for a
+    /// while after something happens, what happened (up to two lines).
+    fn list_summary(&self, ui: &Ui, x: f32, top: f32, room: f32, t: &Tokens) {
         let now = now(ui);
         let p = ui.painter();
         match &self.message {
@@ -1381,9 +1370,9 @@ impl PlayerApp {
                     overflow_character: Some('…'),
                 };
                 let g = p.layout_job(job);
-                p.galley(Pos2::new(x, bottom - g.size().y), g, t.text);
+                p.galley(Pos2::new(x, top), g, t.text);
             }
-            _ if !self.rows.is_empty() => {
+            _ if !self.rows.is_empty() && !self.s.simple => {
                 let n = self.rows.len();
                 let total: f64 = self.rows.iter().filter_map(Row::seconds).sum();
                 let mut s = format!("{n} track{}", if n == 1 { "" } else { "s" });
@@ -1392,8 +1381,8 @@ impl PlayerApp {
                 }
                 hifi::label_fit(
                     p,
-                    Pos2::new(x, bottom),
-                    Align2::LEFT_BOTTOM,
+                    Pos2::new(x, top),
+                    Align2::LEFT_TOP,
                     &s,
                     hifi::ui_font(13.0),
                     t.dim,
@@ -1784,6 +1773,7 @@ impl PlayerApp {
         let mut subfolders = self.s.subfolders;
         let mut spectrum = self.s.spectrum;
         let mut play_on_open = self.s.play_on_open;
+        let mut meter_colours = self.s.meter_colours;
         let mut items = vec!["System default".to_string()];
         items.extend(self.devices.iter().cloned());
         let sel = self
@@ -1817,13 +1807,39 @@ impl PlayerApp {
                     &mut play_on_open,
                 ),
                 ("Include sub-folders", "subfolders", &mut subfolders),
-                ("Spectrum in the display", "spectrum", &mut spectrum),
             ] {
                 let r = hifi::drawer_row(ui, t, label, 32.0);
                 let r = Rect::from_min_size(r.min + Vec2::new(0.0, 4.0), Vec2::new(32.0, 18.0));
                 if hifi::switch(ui, r, Id::new(id), t, *v).clicked() {
                     *v = !*v;
                 }
+            }
+
+            hifi::drawer_heading(ui, t, "Display");
+            let r = hifi::drawer_row(ui, t, "Meter colours", 150.0);
+            let names = hifi::MeterColours::ALL.map(|m| m.name());
+            let sel = hifi::MeterColours::ALL
+                .iter()
+                .position(|m| *m == meter_colours)
+                .unwrap_or(0);
+            if let (_, Some(i)) = hifi::segmented(
+                ui,
+                Pos2::new(r.right(), r.center().y),
+                true,
+                Id::new("meter-colours"),
+                t,
+                &names,
+                sel,
+                hifi::Seg::Plain,
+                &[],
+                &[],
+            ) {
+                meter_colours = hifi::MeterColours::ALL[i];
+            }
+            let r = hifi::drawer_row(ui, t, "Spectrum in the display", 32.0);
+            let r = Rect::from_min_size(r.min + Vec2::new(0.0, 4.0), Vec2::new(32.0, 18.0));
+            if hifi::switch(ui, r, Id::new("spectrum"), t, spectrum).clicked() {
+                spectrum = !spectrum;
             }
 
             hifi::drawer_heading(ui, t, "Window");
@@ -1843,19 +1859,27 @@ impl PlayerApp {
                 ("Home", "Back to the start of the list"),
                 ("Shift+drop", "Add to the list"),
             ] {
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [130.0, 18.0],
-                        egui::Label::new(
-                            egui::RichText::new(k).font(hifi::num(12.0)).color(t.text),
-                        ),
-                    );
-                    ui.label(
-                        egui::RichText::new(what)
-                            .font(hifi::ui_font(12.5))
-                            .color(t.dim),
-                    );
-                });
+                // Two columns, both from the left edge.
+                let (row, _) =
+                    ui.allocate_exact_size(Vec2::new(ui.available_width(), 18.0), Sense::hover());
+                let y = row.center().y;
+                let p = ui.painter();
+                hifi::label(
+                    p,
+                    Pos2::new(row.left(), y),
+                    Align2::LEFT_CENTER,
+                    k,
+                    hifi::num(12.0),
+                    t.text,
+                );
+                hifi::label(
+                    p,
+                    Pos2::new(row.left() + 136.0, y),
+                    Align2::LEFT_CENTER,
+                    what,
+                    hifi::ui_font(12.5),
+                    t.dim,
+                );
             }
         });
         self.settings_open = open;
@@ -1863,6 +1887,7 @@ impl PlayerApp {
         self.s.subfolders = subfolders;
         self.s.spectrum = spectrum;
         self.s.play_on_open = play_on_open;
+        self.s.meter_colours = meter_colours;
         if let Some(n) = device {
             self.s.device = (n > 0).then(|| items[n].clone());
             self.engine.send(Cmd::Device(self.s.device.clone()));
@@ -1930,7 +1955,7 @@ fn chip(p: &egui::Painter, left_centre: Pos2, s: &str, t: &Tokens) -> f32 {
     );
     p.rect_stroke(
         r,
-        CornerRadius::same(5),
+        CornerRadius::same(hifi::RADIUS),
         Stroke::new(1.0, t.line),
         StrokeKind::Inside,
     );

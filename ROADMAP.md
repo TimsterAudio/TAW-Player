@@ -8,9 +8,9 @@ Where the items below land, release by release. Sizes: S = one session, M = two 
 
 | Release | What | Needs | Size |
 |---|---|---|---|
-| 0.2.0 ✓ | **Released 2026-10-15.** Feedback from the 0.1.0 test on Linux Mint** ([brief](docs/briefs/2026-10-14-0.2.0.md)): don't start playing on open (a setting, off by default; `--play` still plays); an Add key to append to the list; a dB scale on the meters; meters centred when the spectrum is off; media keys and system media controls (MPRIS, SMTC); the bottom-corner resize; the back-to-start key | TAW-Panel 0.3.3 (meter scale; the resize fix; the badge on its own) | M |
+| 0.2.0 ✓ | **Released 2026-10-15.** Feedback from the 0.1.0 test on Linux Mint** ([brief](docs/briefs/2026-10-14-0.2.0.md)): don't start playing on open (a setting, off by default; `--play` still plays); an Add key to append to the list; a dB scale on the meters; meters centred when the spectrum is off; media keys and system media controls (MPRIS, SMTC); the bottom-corner resize; the back-to-start key | TAW-Panel 0.4.0 (meter scale; the resize fix; the hi-fi look tightened) | M |
 | 0.3.0 | WASAPI exclusive mode; gapless across a rate change where the device allows | A real Windows test | L |
-| 0.4.0 | Now Playing and Mini layouts; Spool's meter scale and peak hold; the VU window; resizable list columns | TAW-Panel 0.4.0 and 0.5.0 | M |
+| 0.4.0 | Now Playing and Mini layouts; Spool's meter scale and peak hold; the VU window; resizable list columns | TAW-Panel 0.5.0 and 0.6.0 | M |
 | 0.5.0 | Playlist editing (reorder, remove, save as M3U8); remember the list and position; CUE sheets | — | M–L |
 | later | Browse the Library's database; ReplayGain; downmix; Opus; AAC gapless when symphonia reads iTunSMPB; the retro deck look with skins | — | — |
 
@@ -41,6 +41,7 @@ Still to test on a real desktop: MP3 gapless, opening an M3U8 (the Library's Pla
 ### Meters
 - [x] LED peak meters, instant rise, steady fall, at rest on pause
 - [x] A dB scale on the LED meters (0, −3, −6, −12, −24, −48)
+- [x] Meter colours: classic, or the display's own
 - [ ] Spool's meter scale (20 segments, one per dB at the top) and its four peak LEDs with hold (0.5–10 s or until cleared)
 - [ ] VU meters (needle, true VU ballistics, 0 VU reference −20 to −6 dBFS), in their own window
 - [x] Spectrum (new; from TAW-Panel)

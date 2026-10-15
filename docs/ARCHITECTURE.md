@@ -36,7 +36,7 @@ It runs on the audio thread and must never lock, allocate, log or touch files. E
 
 ## The panel (`app.rs`)
 
-Laid out for 1180 × 720 and up, scaled down to fit smaller windows (never up: a bigger window gives the artwork, up to 800 × 800, and the list more room; the artwork's column also stops short of pushing the list's keys into the family switcher on the nameplate's row), drawn with TAW-Panel's `hifi` look. The Player draws its own title strip, window buttons and resize edges unless Settings turns the system title bar on. It polls the engine's `Status` (marks, output, messages, a new spectrum feed after the output reopens) each frame, the tag reader's results, and the inbox. While playing it repaints about 30 times a second; otherwise twice a second, to notice hand-overs from the Library.
+Laid out for 1180 × 720 and up, scaled down to fit smaller windows (never up: a bigger window gives the artwork, up to 1000 × 1000, and the list more room; the artwork's column also stops short of pushing the list's keys into the family switcher on the nameplate's row), drawn with TAW-Panel's `hifi` look. The Player draws its own title strip, window buttons and resize edges unless Settings turns the system title bar on. It polls the engine's `Status` (marks, output, messages, a new spectrum feed after the output reopens) each frame, the tag reader's results, and the inbox. While playing it repaints about 30 times a second; otherwise twice a second, to notice hand-overs from the Library.
 
 ## Media keys (`media.rs`)
 
