@@ -16,6 +16,7 @@ It owns the queue (the list of paths), the open output and the track being decod
 
 - **Gapless.** When a track's decoder runs out, the next track is opened at once and its samples follow the last ones into the same ring. Nothing between them is inserted or dropped, so tracks at the same rate join seamlessly. If resampling, the same resampler carries on across the join.
 - **Rate changes.** Before a track starts, `convert::choose_rate` picks the output rate: the track's own if the device offers it, otherwise the nearest rate in the same family (44.1k or 48k multiples). On Windows only the shared-mode mixer's rate is offered, so other rates are resampled here, visibly, rather than quietly by Windows. If the next track wants a different rate from the open output, the ring is played out, the output is reopened at the new rate, and the track starts (a short pause between albums at different rates, never a resample that isn't needed).
+- **Adding to the list** (`Cmd::Append`) lengthens the queue. While the last track is still being decoded, the decoder reaches the new tracks by itself. If it had already run out of list but the last track is still playing (the end-of-list mark is written but not reached), it takes away the end mark and opens the next track straight on from the last, as if it had been there all along. Once the list has played out, adding starts nothing.
 - **Jumps** (play a track, seek, stop, change device) flush the ring: the player thread sets `Shared::flush`, the callback empties the ring and counts what it dropped as played, and the player thread starts writing the new position.
 - **Marks.** For every track it starts, the player thread records a `Mark`: where in the output stream (in frames) the track begins, its offset (after a seek), and plain facts about it (codec, rate, bits, the output rate, whether it's resampled). The panel compares these with `Shared::played`, the callback's running count of frames played, to know which track is audible now and how far in; so the display changes track exactly when the sound does, not when the decoder moved on. A last mark with no track marks the end of the list.
 
@@ -35,11 +36,15 @@ It runs on the audio thread and must never lock, allocate, log or touch files. E
 
 ## The panel (`app.rs`)
 
-Laid out for 1180 × 720 and up, scaled down to fit smaller windows (never up: a bigger window gives the artwork and the list more room), drawn with TAW-Panel's `hifi` look. The Player draws its own title strip, window buttons and resize edges unless Settings turns the system title bar on. It polls the engine's `Status` (marks, output, messages, a new spectrum feed after the output reopens) each frame, the tag reader's results, and the inbox. While playing it repaints about 30 times a second; otherwise twice a second, to notice hand-overs from the Library.
+Laid out for 1180 × 720 and up, scaled down to fit smaller windows (never up: a bigger window gives the artwork, up to 1000 × 1000, and the list more room; the artwork's column also stops short of pushing the list's keys into the family switcher on the nameplate's row), drawn with TAW-Panel's `hifi` look. The Player draws its own title strip, window buttons and resize edges unless Settings turns the system title bar on. It polls the engine's `Status` (marks, output, messages, a new spectrum feed after the output reopens) each frame, the tag reader's results, and the inbox. While playing it repaints about 30 times a second; otherwise twice a second, to notice hand-overs from the Library.
+
+## Media keys (`media.rs`)
+
+souvlaki connects the Player to the desktop: MPRIS on Linux (over zbus, so there's no libdbus to build against), the System Media Transport Controls on Windows (which need the window's handle, taken when the panel starts). Keys arrive on souvlaki's thread, go down a channel and wake the panel, which acts on them as on its own keys. Each frame the panel tells it the playing track and the state; it sends only what changed, and the position about twice a second (MPRIS doesn't count the time itself). The artwork is found on a worker thread: the folder's cover as a `file://` URL, or else the file's picture written to `now-playing/` in the data folder.
 
 ## One Player at a time (`instance.rs`)
 
-The running Player writes `running` (its process id and the time) to its data folder every second. A later launch with files checks it: if a Player checked in within three seconds, it writes the list to `inbox/<time>-<pid>.json` and waits up to three seconds for the running Player to take (delete) it, then exits. If nobody takes it, it opens the files itself. No sockets, so nothing listens on the network.
+The running Player writes `running` (its process id and the time) to its data folder every second. A later launch with files checks it: if a Player checked in within three seconds, it writes the list (and whether `--play` was given) to `inbox/<time>-<pid>.json` and waits up to three seconds for the running Player to take (delete) it, then exits. If nobody takes it, it opens the files itself. No sockets, so nothing listens on the network.
 
 ## Family (`family.rs`)
 
@@ -47,7 +52,7 @@ The running Player writes `running` (its process id and the time) to its data fo
 
 ## Testing without a sound card
 
-Unit tests cover the playlist, M3U parsing, the rate decision, the converter (untouched pass-through, resampled length and level), track location from marks, decoding, artwork search, family search and the hand-off.
+Unit tests cover the media keys and artwork URLs, the playlist, M3U parsing, the rate decision, the converter (untouched pass-through, resampled length and level), track location from marks, decoding, artwork search, family search and the hand-off.
 
 To hear (or measure) real playback in a cloud session, run PipeWire with a null sink and record its monitor:
 
@@ -59,5 +64,7 @@ dbus-run-session -- sh -c 'pipewire & sleep 1; wireplumber & sleep 2;
 pw-record --target testsink -P '{ stream.capture.sink=true }' --format f32 out.wav &
 DISPLAY=:99 cargo run --release -- tools/fixtures/gapless-flac
 ```
+
+`cargo test --release -- --ignored follow_on` checks that tracks added near the end of the list follow on frame for frame (it needs the output at 44.1 kHz; see the next line). `playerctl -p taw_player status` (and `play`, `next`, `metadata`…) tries the media controls, in the same D-Bus session as the Player.
 
 `pw-metadata -n settings 0 clock.allowed-rates "[ 44100 48000 96000 ]"` lets PipeWire follow the track's rate, to try the rate change. The test tracks are one continuous 440 Hz sine, so a gap shows up as a run of zeros and a click as a spike in the second difference of the recording.

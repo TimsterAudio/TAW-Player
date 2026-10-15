@@ -12,6 +12,7 @@ mod engine;
 mod family;
 mod icon;
 mod instance;
+mod media;
 mod playlist;
 mod tags;
 
@@ -21,14 +22,17 @@ const USAGE: &str = "TAW Player (PL-001)
 
   taw-player [--play] [FILE | FOLDER | PLAYLIST.m3u8 ...]
 
-Plays what it's given: audio files, folders (with their sub-folders) or
-M3U/M3U8 playlists. If a Player is already open, it takes them instead.";
+Opens what it's given: audio files, folders (with their sub-folders) or
+M3U/M3U8 playlists. With --play it plays them straight away; without it,
+it does what Settings says (\"Start playing when I open music\"). If a
+Player is already open, it takes them instead.";
 
 fn main() -> eframe::Result {
     let mut paths: Vec<PathBuf> = Vec::new();
+    let mut play = false;
     for a in std::env::args_os().skip(1) {
         match a.to_str() {
-            Some("--play") => {}
+            Some("--play") => play = true,
             Some("-h" | "--help") => {
                 println!("{USAGE}");
                 return Ok(());
@@ -44,7 +48,7 @@ fn main() -> eframe::Result {
         }
     }
     if let Some(dir) = instance::data_dir() {
-        if instance::hand_over(&dir, &paths) {
+        if instance::hand_over(&dir, &paths, play) {
             return Ok(());
         }
     }
@@ -64,6 +68,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "TAW Player",
         options,
-        Box::new(move |cc| Ok(Box::new(app::PlayerApp::new(cc, paths)))),
+        Box::new(move |cc| Ok(Box::new(app::PlayerApp::new(cc, paths, play)))),
     )
 }

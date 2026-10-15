@@ -1,14 +1,14 @@
 [package]
 name = "taw-player"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Timster's Audio Works Player (PL-001): a native, gapless music player for Windows and Linux"
 authors = ["Timster's Audio Works"]
 publish = false
 
 [dependencies]
-# 0.3.0: the TAW look (hifi), spectrum drawing and the analyser
-taw-panel = { git = "https://github.com/TimsterAudio/TAW-Panel", rev = "1b8162d75d10c41a8c9b021fc3d31e2a3311aeb6", features = ["analyser"] }
+# 0.4.0: the TAW look (hifi), meter scale, spectrum drawing and the analyser
+taw-panel = { git = "https://github.com/TimsterAudio/TAW-Panel", rev = "d030ffdbc51c48e784cd74b20c5547a766461e5a", features = ["analyser"] }
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "persistence", "wayland", "x11"] }
 egui = "0.36"
 cpal = "0.18"
@@ -20,6 +20,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Media keys and the desktop's media controls: MPRIS (over zbus, no libdbus) and SMTC
+souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
+
+[target.'cfg(windows)'.dependencies]
+# The window handle the media controls need on Windows
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "0.18", features = ["pipewire"] }
@@ -31,3 +37,6 @@ codegen-units = 1
 
 [profile.dev.package."*"]
 opt-level = 2
+
+
+

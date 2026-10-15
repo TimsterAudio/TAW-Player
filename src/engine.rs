@@ -26,6 +26,9 @@ use taw_panel::analyzer::{analyzer_channel, AnalyzerTap};
 pub enum Cmd {
     /// The list to play from (doesn't start playing).
     Queue(Vec<PathBuf>),
+    /// More tracks at the end of the list. If the list was still playing
+    /// out its last track, it carries on into them without a gap.
+    Append(Vec<PathBuf>),
     /// Play track `i` of the list from its start.
     Play(usize),
     /// Seek within the track that's playing.
@@ -455,6 +458,11 @@ impl Player {
     fn handle(&mut self, c: Cmd) {
         match c {
             Cmd::Queue(q) => self.queue = q,
+            Cmd::Append(mut more) => {
+                let first = self.queue.len();
+                self.queue.append(&mut more);
+                self.carry_on(first);
+            }
             Cmd::Play(i) => {
                 self.shared.paused.store(false, Relaxed);
                 self.jump(i, 0.0);
@@ -637,9 +645,9 @@ impl Player {
             }
             self.begin(i, s, 0.0, false);
         }
-        let Some(ch) = self.out.as_ref().map(|o| o.channels) else {
+        if self.out.is_none() {
             return;
-        };
+        }
         loop {
             if self.has_pending() && !self.push_pending() {
                 return; // the ring is full
@@ -677,15 +685,20 @@ impl Player {
                         c.push(block, bch, &mut self.pending);
                     }
                 }
-                None => self.next_track(ch),
+                None => self.next_track(),
             }
         }
     }
 
     /// The decoder reached the end of a track: on to the next one.
-    fn next_track(&mut self, _ch: usize) {
+    fn next_track(&mut self) {
         let (i, _) = self.src.take().unwrap();
-        let mut n = i + 1;
+        self.advance(i + 1);
+    }
+
+    /// Opens the first readable track from `n` on, straight on from what's
+    /// already in the stream; or marks the end of the list.
+    fn advance(&mut self, mut n: usize) {
         while n < self.queue.len() {
             match Source::open(&self.queue[n]) {
                 Ok(s) => {
@@ -714,6 +727,35 @@ impl Player {
             c.finish(&mut self.pending);
         }
         self.ending = true;
+    }
+
+    /// Tracks were added from `first` on. If the decoder had already run
+    /// out of list while its last track is still playing, it takes up the
+    /// new ones where it stopped, so they follow on as if they'd been there
+    /// all along. (While it's still decoding, it reaches them by itself;
+    /// once the list has finished, or after Stop, nothing starts.)
+    fn carry_on(&mut self, first: usize) {
+        if self.src.is_some() || self.switch_to.is_some() || self.out.is_none() {
+            return;
+        }
+        let played = self.shared.played.load(Relaxed) as i64;
+        let last_was_end = self.marks.last().is_some_and(|m| m.index.is_none());
+        let still_playing = if last_was_end {
+            // The end mark is written but not reached yet.
+            self.marks.len() > 1 && self.marks.last().is_some_and(|m| m.start > played)
+        } else {
+            self.ending
+        };
+        let last_index = self.marks.iter().rev().find_map(|m| m.index);
+        if !still_playing || last_index.map(|i| i + 1) != Some(first) {
+            return;
+        }
+        if last_was_end {
+            self.marks.pop();
+        }
+        self.ending = false;
+        self.status_dirty = true;
+        self.advance(first);
     }
 
     /// Moves what fits into the ring. False if some is still waiting.
@@ -809,6 +851,69 @@ mod tests {
         assert_eq!(m.index, Some(1));
         assert!((secs - 1.5).abs() < 1e-9);
         assert_eq!(locate(&marks, 9000).unwrap().0.index, None);
+    }
+
+    /// Needs an output device (PipeWire with a null sink will do) and the
+    /// test tracks: `cargo test -- --ignored follow_on`.
+    #[test]
+    #[ignore]
+    fn appended_tracks_follow_on() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/fixtures/gapless-flac");
+        let parts: Vec<PathBuf> = ["01 Part one.flac", "02 Part two.flac", "03 Part three.flac"]
+            .iter()
+            .map(|n| dir.join(n))
+            .collect();
+        if !parts[0].exists() || host().default_output_device().is_none() {
+            eprintln!("skipped: no test tracks or no output device");
+            return;
+        }
+        let marks = |e: &Engine| e.shared.status.lock().unwrap().marks.clone();
+        let wait_for = |e: &Engine, what: &dyn Fn(&[Mark]) -> bool| {
+            let t = Instant::now();
+            while !what(&marks(e)) {
+                assert!(t.elapsed() < Duration::from_secs(10), "timed out");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let e = Engine::start(None, 1.0);
+        // Appended while the last track is still being decoded, and again
+        // once the decoder has reached the end of the list but the last
+        // track is still playing: each time straight on, frame for frame.
+        e.send(Cmd::Queue(parts[..1].to_vec()));
+        e.send(Cmd::Play(0));
+        wait_for(&e, &|m| m.iter().any(|m| m.index == Some(0)));
+        e.send(Cmd::Append(parts[1..2].to_vec()));
+        wait_for(&e, &|m| m.last().is_some_and(|m| m.index.is_none()));
+        e.send(Cmd::Append(parts[2..].to_vec()));
+        wait_for(&e, &|m| m.iter().any(|m| m.index == Some(2)));
+        let m = marks(&e);
+        assert_eq!(
+            m[0].out_rate, 44_100,
+            "the output must take 44.1 kHz for frame counts to compare \
+             (pw-metadata -n settings 0 clock.allowed-rates \"[ 44100 48000 ]\")"
+        );
+        let start = |i| m.iter().find(|m| m.index == Some(i)).unwrap().start;
+        assert_eq!(start(2) - start(1), 175_333);
+        assert!(e.shared.underruns.load(Relaxed) == 0);
+        // Part one has played by now, so only its successors are marked.
+        wait_for(&e, &|m| m.last().is_some_and(|m| m.index.is_none()));
+        let m = marks(&e);
+        let end = m.last().unwrap().start;
+        assert_eq!(
+            end - m.iter().find(|m| m.index == Some(2)).unwrap().start,
+            233_777
+        );
+        // Once the list has played out, adding doesn't start it again.
+        let played = |e: &Engine| e.played() as i64;
+        let t = Instant::now();
+        while played(&e) < end && t.elapsed() < Duration::from_secs(15) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        e.send(Cmd::Append(parts[..1].to_vec()));
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(marks(&e).iter().all(|m| m.index != Some(3)));
+        assert_eq!(e.shared.underruns.load(Relaxed), 0);
     }
 
     #[test]

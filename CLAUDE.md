@@ -24,6 +24,7 @@ The Player (PL-001) is a native, gapless music player by Timster's Audio Works, 
 | `src/convert.rs` | The rate decision, channel mapping, resampling (rubato) only when needed. |
 | `src/playlist.rs` | Folders, files and M3U/M3U8 into a list. |
 | `src/tags.rs` | Tags and artwork (lofty), on worker threads. |
+| `src/media.rs` | Media keys and the desktop's media controls (souvlaki: MPRIS over zbus on Linux, SMTC on Windows). |
 | `src/family.rs` | Finding and starting the Library, Equaliser and Analyser. |
 | `src/instance.rs` | One Player at a time; the data folder. |
 | `src/icon.rs` | The window icon. |
