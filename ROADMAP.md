@@ -8,7 +8,7 @@ Where the items below land, release by release. Sizes: S = one session, M = two 
 
 | Release | What | Needs | Size |
 |---|---|---|---|
-| 0.2.0 ✓ | **Released 2026-10-15.** Feedback from the 0.1.0 test on Linux Mint** ([brief](docs/briefs/2026-10-14-0.2.0.md)): don't start playing on open (a setting, off by default; `--play` still plays); an Add key to append to the list; a dB scale on the meters; meters centred when the spectrum is off; media keys and system media controls (MPRIS, SMTC); the bottom-corner resize; the back-to-start key | TAW-Panel 0.3.2 (meter scale; the resize fix) | M |
+| 0.2.0 ✓ | **Released 2026-10-15.** Feedback from the 0.1.0 test on Linux Mint** ([brief](docs/briefs/2026-10-14-0.2.0.md)): don't start playing on open (a setting, off by default; `--play` still plays); an Add key to append to the list; a dB scale on the meters; meters centred when the spectrum is off; media keys and system media controls (MPRIS, SMTC); the bottom-corner resize; the back-to-start key | TAW-Panel 0.3.3 (meter scale; the resize fix; the badge on its own) | M |
 | 0.3.0 | WASAPI exclusive mode; gapless across a rate change where the device allows | A real Windows test | L |
 | 0.4.0 | Now Playing and Mini layouts; Spool's meter scale and peak hold; the VU window; resizable list columns | TAW-Panel 0.4.0 and 0.5.0 | M |
 | 0.5.0 | Playlist editing (reorder, remove, save as M3U8); remember the list and position; CUE sheets | — | M–L |

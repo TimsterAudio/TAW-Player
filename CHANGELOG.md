@@ -12,6 +12,7 @@ From the 0.1.0 test on Linux Mint.
 - With the spectrum off, the meters sit in the middle of the display.
 - Media keys and the desktop's media controls: play, pause, next, previous, stop and seeking from the keyboard's media keys, the sound menu (MPRIS on Linux, `playerctl` too) and Windows' media overlay, which show the track's title, artist, album, length and artwork.
 - Back to start (|◀◀ next to Previous, or Home): back to the first track of the list, as in Spool.
+- A tidier front panel: the "Timster's Audio Works - Player" badge sits in the middle of the top edge, with the PLAYER logo and model line up at the left; Open folder, Open files, Add and Clear are on the nameplate's row over the display, in line with the family keys; the track count and total time (and messages) are under the artwork with the track; the display and the list move up; and the artwork grows with the window up to 800 × 800 (TAW-Panel 0.3.3).
 - The window resizes from all four corners, and every time; before, a corner moved only one side, and every other resize or move did nothing (TAW-Panel 0.3.2).
 
 ## 0.1.0 – 2026-10-14

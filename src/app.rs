@@ -27,7 +27,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_SIZE: Vec2 = Vec2::new(1280.0, 800.0);
 /// Below this size the panel scales down; above it the list gets the room.
 const MIN_DESIGN: Vec2 = Vec2::new(1180.0, 720.0);
-const PLATE_H: f32 = 96.0;
+const PLATE_H: f32 = 76.0;
+/// The middle of the nameplate's row of keys (family, view, settings, and
+/// the list's keys over the right column).
+const ROW_Y: f32 = 52.0;
+/// Under the artwork: the track, what's happening to it, and the list's
+/// size or the latest message.
+const UNDER_ART: f32 = 220.0;
+/// The artwork stops growing here.
+const ART_MAX: f32 = 800.0;
 const BAR_H: f32 = 96.0;
 const DISPLAY_H: f32 = 112.0;
 const ROW_H: f32 = 30.0;
@@ -888,15 +896,24 @@ impl PlayerApp {
 
     // ------------------------------------------------------------ top
 
-    fn plate(&mut self, ui: &mut Ui, screen: Rect, t: &Tokens) {
+    /// The nameplate and its row of keys. Returns where the family
+    /// switcher begins, so the list's keys can stop short of it.
+    fn plate(&mut self, ui: &mut Ui, screen: Rect, t: &Tokens) -> f32 {
         let now = now(ui);
         let plate = Rect::from_min_size(screen.min, Vec2::new(screen.width(), PLATE_H));
         if !self.s.system_title_bar {
             hifi::drag_to_move(ui, plate);
         }
-        hifi::nameplate(
+        // The badge in the middle of the top edge; the logo up at the left.
+        hifi::badge(
+            ui.painter(),
+            Pos2::new(screen.center().x, screen.top() + 8.0),
+            t,
+            "Player",
+        );
+        hifi::logo(
             ui,
-            screen.min + Vec2::new(24.0, 14.0),
+            screen.min + Vec2::new(24.0, 16.0),
             t,
             "Player",
             &format!("PL-001 · Music player · V{VERSION}"),
@@ -905,7 +922,7 @@ impl PlayerApp {
             hifi::window_buttons(ui, Pos2::new(screen.right() - 10.0, screen.top() + 10.0), t);
         }
         let right = screen.right() - 24.0;
-        let row = screen.top() + 66.0;
+        let row = screen.top() + ROW_Y;
         let gear = Rect::from_min_size(Pos2::new(right - 30.0, row - 15.0), Vec2::splat(30.0));
         if hifi::gear_button(ui, gear, Id::new("settings"), t, self.settings_open).clicked() {
             self.settings_open = !self.settings_open;
@@ -932,7 +949,7 @@ impl PlayerApp {
             found(App::Equaliser),
             found(App::Analyser),
         ];
-        let (_, picked) =
+        let (fam, picked) =
             hifi::family_switch(ui, Pos2::new(seg.left() - 14.0, row), t, 1, installed);
         let app = match picked {
             Some(0) => Some(App::Library),
@@ -943,6 +960,7 @@ impl PlayerApp {
         if let Some(a) = app {
             self.start_family(a, now);
         }
+        fam.left()
     }
 
     // ------------------------------------------------------------ left column
@@ -954,6 +972,9 @@ impl PlayerApp {
             .map(|(i, _, _)| *i)
             .or(self.selected)
             .filter(|&i| i < self.rows.len());
+
+        // The list's size (or the latest message), along the bottom.
+        self.list_summary(ui, rect.left(), rect.bottom(), rect.width(), t);
 
         // Artwork.
         let art = Rect::from_min_size(rect.min, Vec2::splat(rect.width()));
@@ -1275,10 +1296,10 @@ impl PlayerApp {
 
     // ------------------------------------------------------------ list
 
-    fn toolbar(&mut self, ui: &mut Ui, rect: Rect, t: &Tokens) {
+    /// The list's keys, from `left` along the row centred on `y`.
+    fn toolbar(&mut self, ui: &mut Ui, left: f32, y: f32, t: &Tokens) {
         let now = now(ui);
-        let mut x = rect.left();
-        let y = rect.center().y;
+        let mut x = left;
         for (id, s, tip) in [
             (
                 "folder",
@@ -1326,8 +1347,22 @@ impl PlayerApp {
             }
             x += w + 8.0;
         }
+    }
+
+    /// How wide the list's keys are, all told.
+    fn toolbar_width(ui: &Ui) -> f32 {
+        ["Open folder", "Open files", "Add", "Clear"]
+            .iter()
+            .map(|s| hifi::button_width(ui, s) + 8.0)
+            .sum::<f32>()
+            - 8.0
+    }
+
+    /// Under the track: the list's size and length, or for a while after
+    /// something happens, what happened (up to two lines).
+    fn list_summary(&self, ui: &Ui, x: f32, bottom: f32, room: f32, t: &Tokens) {
+        let now = now(ui);
         let p = ui.painter();
-        let room = rect.right() - x - 16.0;
         match &self.message {
             Some((m, at)) if now - at < 10.0 => {
                 // Up to two lines, so a longer message still fits.
@@ -1346,8 +1381,7 @@ impl PlayerApp {
                     overflow_character: Some('…'),
                 };
                 let g = p.layout_job(job);
-                let at = Pos2::new(rect.right() - g.size().x, y - g.size().y / 2.0);
-                p.galley(at, g, t.text);
+                p.galley(Pos2::new(x, bottom - g.size().y), g, t.text);
             }
             _ if !self.rows.is_empty() => {
                 let n = self.rows.len();
@@ -1358,8 +1392,8 @@ impl PlayerApp {
                 }
                 hifi::label_fit(
                     p,
-                    Pos2::new(rect.right(), y),
-                    Align2::RIGHT_CENTER,
+                    Pos2::new(x, bottom),
+                    Align2::LEFT_BOTTOM,
                     &s,
                     hifi::ui_font(13.0),
                     t.dim,
@@ -1874,8 +1908,11 @@ fn window_handle(cc: &eframe::CreationContext<'_>) -> Option<*mut std::ffi::c_vo
     }
 }
 
-/// "39 min", "1 h 12 min".
+/// "25 s", "39 min", "1 h 12 min".
 fn duration_words(secs: f64) -> String {
+    if secs < 59.5 {
+        return format!("{} s", secs.round().max(1.0) as u64);
+    }
     let m = (secs / 60.0).round() as u64;
     if m >= 60 {
         format!("{} h {} min", m / 60, m % 60)
@@ -2139,7 +2176,7 @@ impl eframe::App for PlayerApp {
 
         let screen = ui.max_rect();
         hifi::faceplate(ui.painter(), screen, &t);
-        self.plate(ui, screen, &t);
+        let family_left = self.plate(ui, screen, &t);
         let bar = Rect::from_min_max(
             Pos2::new(screen.left(), screen.bottom() - BAR_H),
             screen.max,
@@ -2154,8 +2191,12 @@ impl eframe::App for PlayerApp {
             Pos2::new(screen.left() + 24.0, screen.top() + PLATE_H + 8.0),
             Pos2::new(screen.right() - 24.0, bar.top() - 22.0),
         );
-        // The artwork is as big as the height allows, within reason.
-        let left_w = (body.height() - 170.0).clamp(240.0, 400.0);
+        // The artwork is as big as the height allows, up to 800, leaving
+        // the list's keys room on the nameplate's row beside the family
+        // switcher.
+        let tools_w = Self::toolbar_width(ui);
+        let room = family_left - 16.0 - tools_w - 28.0 - body.left();
+        let left_w = (body.height() - UNDER_ART).min(room).clamp(240.0, ART_MAX);
         let left = Rect::from_min_size(body.min, Vec2::new(left_w, body.height()));
         self.left(ui, left, &t);
         let mut right = Rect::from_min_max(Pos2::new(left.right() + 28.0, body.top()), body.max);
@@ -2164,9 +2205,7 @@ impl eframe::App for PlayerApp {
             self.display(ui, d, &t);
             right.min.y = d.bottom() + 14.0;
         }
-        let tools = Rect::from_min_size(right.min, Vec2::new(right.width(), 30.0));
-        self.toolbar(ui, tools, &t);
-        right.min.y = tools.bottom() + 10.0;
+        self.toolbar(ui, right.left(), screen.top() + ROW_Y, &t);
         self.playlist(ui, right, &t);
 
         self.settings(&ctx, &t);

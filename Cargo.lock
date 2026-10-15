@@ -3666,8 +3666,8 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "taw-panel"
-version = "0.3.2"
-source = "git+https://github.com/TimsterAudio/TAW-Panel?rev=5290f15aa8275851ba68e90417325e20565b1eeb#5290f15aa8275851ba68e90417325e20565b1eeb"
+version = "0.3.3"
+source = "git+https://github.com/TimsterAudio/TAW-Panel?rev=3cf118182042752e9ec3622b6d202bf2d8f96dad#3cf118182042752e9ec3622b6d202bf2d8f96dad"
 dependencies = [
  "egui",
  "rtrb",
