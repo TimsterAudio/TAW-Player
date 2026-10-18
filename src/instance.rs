@@ -8,8 +8,17 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// `%APPDATA%\Timster's Audio Works\Player` on Windows,
+/// `~/Library/Application Support/Timster's Audio Works/Player` on macOS,
 /// `~/.local/share/timsters-audio-works/player` elsewhere.
 pub fn data_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        return std::env::var_os("HOME").map(|h| {
+            PathBuf::from(h)
+                .join("Library/Application Support")
+                .join("Timster's Audio Works")
+                .join("Player")
+        });
+    }
     if cfg!(windows) {
         std::env::var_os("APPDATA").map(|a| {
             PathBuf::from(a)

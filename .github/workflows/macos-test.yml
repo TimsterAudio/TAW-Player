@@ -1,0 +1,76 @@
+# A test build for the Mac, separate from the releases: one universal
+# TAW Player.app (Apple silicon and Intel), signed ad hoc, zipped with
+# packaging/macos/READ ME FIRST.txt as this run's artifact (kept 7 days).
+#
+# Mac runners cost several times Linux ones, so it only runs when the Mac
+# packaging (or this file) changes on a branch, or by hand.
+
+name: macOS test build
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - packaging/macos/**
+      - .github/workflows/macos-test.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+jobs:
+  macos:
+    name: macOS app
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos
+      - name: Build for Apple silicon and Intel
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+      - name: Make the app
+        run: |
+          set -e
+          ver=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          app="TAW Player.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          lipo -create -output "$app/Contents/MacOS/taw-player" \
+            target/aarch64-apple-darwin/release/taw-player \
+            target/x86_64-apple-darwin/release/taw-player
+          sed "s/@VERSION@/$ver/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          # The icon at every size macOS wants.
+          mkdir taw-player.iconset
+          for s in 16 32 128 256 512; do
+            python3 packaging/macos/make-icon.py $s "taw-player.iconset/icon_${s}x${s}.png"
+            python3 packaging/macos/make-icon.py $((s * 2)) "taw-player.iconset/icon_${s}x${s}@2x.png"
+          done
+          iconutil -c icns taw-player.iconset -o "$app/Contents/Resources/taw-player.icns"
+          # Ad hoc: no Developer ID, so macOS asks once before opening it.
+          codesign --force --deep --sign - "$app"
+          codesign --verify --verbose "$app"
+          lipo -info "$app/Contents/MacOS/taw-player"
+          "$app/Contents/MacOS/taw-player" --version
+          name="taw-player-$ver-macos"
+          mkdir "$name"
+          mv "$app" "$name/"
+          cp "packaging/macos/READ ME FIRST.txt" "$name/"
+          # ditto keeps the bundle intact (permissions, signature) in the zip.
+          ditto -c -k --keepParent "$name" "$name.zip"
+          echo "NAME=$name" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: ${{ env.NAME }}.zip
+          retention-days: 7
