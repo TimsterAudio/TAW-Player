@@ -44,7 +44,7 @@ souvlaki connects the Player to the desktop: MPRIS on Linux (over zbus, so there
 
 ## One Player at a time (`instance.rs`)
 
-The running Player writes `running` (its process id and the time) to its data folder every second. A later launch with files checks it: if a Player checked in within three seconds, it writes the list (and whether `--play` was given) to `inbox/<time>-<pid>.json` and waits up to three seconds for the running Player to take (delete) it, then exits. If nobody takes it, it opens the files itself. No sockets, so nothing listens on the network.
+The running Player writes `running` (its process id and the time) to its data folder every second. Any later launch checks it: if a Player checked in within three seconds, it writes its list, if it has one (and whether `--play` was given), to `inbox/<time>-<pid>.json` and waits up to three seconds for the running Player to take (delete) it, then exits. If nobody takes it, it opens itself. On Windows the launch first lets the running Player take the foreground (`AllowSetForegroundWindow`). The running Player's side is a thread of its own (`Beacon::start`), so it answers while minimised, when the panel doesn't redraw: it brings the window forward and passes any files to the panel. A launch with no files (another app's family switcher, a double-click) just brings the open Player forward. No sockets, so nothing listens on the network. It's the family's way of doing this; TAW-Panel's FAMILY.md describes it for the other apps.
 
 ## Family (`family.rs`)
 

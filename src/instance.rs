@@ -1,6 +1,7 @@
-//! One Player at a time: a second launch (the Library's Play key, or
-//! "Open with" in a file manager) hands its files to the Player that's
-//! already running and exits. It's done with files in the Player's data
+//! One Player at a time: a second launch (the Library's Play key, "Open
+//! with" in a file manager, or the family switcher in another app) hands
+//! its files, if any, to the Player that's already running, which comes to
+//! the front, and exits. It's done with files in the Player's data
 //! folder, not a socket, so nothing listens on the network.
 
 use serde::{Deserialize, Serialize};
@@ -62,12 +63,55 @@ impl Handover {
 /// The running Player's mark: its process id and when it last checked in.
 pub struct Beacon {
     dir: PathBuf,
+    requests: std::sync::mpsc::Receiver<Handover>,
 }
 
 impl Beacon {
     pub fn new(dir: PathBuf) -> Beacon {
         let _ = std::fs::create_dir_all(dir.join("inbox"));
-        Beacon { dir }
+        let (_, requests) = std::sync::mpsc::channel();
+        Beacon { dir, requests }
+    }
+
+    /// Checks in every second and watches the inbox, on a thread of its
+    /// own: a minimised Player doesn't redraw, and would otherwise miss a
+    /// hand-over and let a second Player open. Each request brings the
+    /// window to the front; its files wait in `requests` for the panel.
+    pub fn start(dir: PathBuf, ctx: egui::Context) -> Beacon {
+        let mut b = Beacon::new(dir.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        b.requests = rx;
+        let _ = std::thread::Builder::new()
+            .name("instance".into())
+            .spawn(move || {
+                let me = Beacon::new(dir);
+                let mut last_beat = 0u128;
+                loop {
+                    let t = now_ms();
+                    if t - last_beat >= 1_000 {
+                        last_beat = t;
+                        me.beat();
+                    }
+                    let lists = me.take_inbox();
+                    if !lists.is_empty() {
+                        for h in lists {
+                            if tx.send(h).is_err() {
+                                return;
+                            }
+                        }
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        ctx.request_repaint();
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            });
+        b
+    }
+
+    /// Lists handed over since the last call, oldest first.
+    pub fn requests(&self) -> Vec<Handover> {
+        self.requests.try_iter().collect()
     }
 
     /// Says "still running"; call about once a second.
@@ -105,23 +149,39 @@ impl Beacon {
     }
 }
 
-/// True if another Player checked in within the last few seconds.
-fn other_running(dir: &Path) -> bool {
-    let Ok(s) = std::fs::read_to_string(dir.join("running")) else {
-        return false;
-    };
+/// The process id of another Player that checked in within the last few
+/// seconds.
+fn other_running(dir: &Path) -> Option<u32> {
+    let s = std::fs::read_to_string(dir.join("running")).ok()?;
     let mut it = s.split_whitespace();
-    let pid: u32 = it.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    let at: u128 = it.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    pid != std::process::id() && now_ms().saturating_sub(at) < 3_000
+    let pid: u32 = it.next()?.parse().ok()?;
+    let at: u128 = it.next()?.parse().ok()?;
+    (pid != std::process::id() && now_ms().saturating_sub(at) < 3_000).then_some(pid)
 }
+
+/// Windows only lets the app the user is using bring another to the front;
+/// this launch is that app for now, so it passes the right on.
+#[cfg(windows)]
+fn allow_to_front(pid: u32) {
+    // SAFETY: a plain Win32 call with no pointers.
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid);
+    }
+}
+
+#[cfg(not(windows))]
+fn allow_to_front(_pid: u32) {}
 
 /// Gives `paths` (to play now if `play`) to a Player that's already running. True if it took them
 /// (this launch can then exit).
 pub fn hand_over(dir: &Path, paths: &[PathBuf], play: bool) -> bool {
-    if paths.is_empty() || !other_running(dir) {
+    // With no files too: a second launch (the family switcher in another
+    // app, a double-click) brings the open Player forward instead of
+    // opening another.
+    let Some(pid) = other_running(dir) else {
         return false;
-    }
+    };
+    allow_to_front(pid);
     let inbox = dir.join("inbox");
     let _ = std::fs::create_dir_all(&inbox);
     let file = inbox.join(format!("{}-{}.json", now_ms(), std::process::id()));
@@ -156,7 +216,7 @@ mod tests {
         let b = Beacon::new(d.clone());
         // Our own beacon doesn't count as another Player.
         b.beat();
-        assert!(!other_running(&d));
+        assert!(other_running(&d).is_none());
         assert!(!hand_over(&d, &[PathBuf::from("/x.flac")], true));
         // A list dropped in the inbox comes out once, with or without
         // --play; one from 0.1.0 (just the list) plays.
@@ -183,9 +243,9 @@ mod tests {
         assert!(b.take_inbox().is_empty());
         // Another Player's fresh beacon does count; a stale one doesn't.
         std::fs::write(d.join("running"), format!("1 {}", now_ms())).unwrap();
-        assert!(other_running(&d));
+        assert_eq!(other_running(&d), Some(1));
         std::fs::write(d.join("running"), format!("1 {}", now_ms() - 10_000)).unwrap();
-        assert!(!other_running(&d));
+        assert!(other_running(&d).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
 }
