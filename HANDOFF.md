@@ -4,6 +4,7 @@ Written 2026-10-14 when the family's work moved from one shared chat to a chat p
 
 ## Where it stands
 
+- **0.2.1 released on 2026-11-01**: one Player at a time from anywhere (a launch with no files, such as another app's family switcher, brings the open Player forward; the hand-off is watched on its own thread so a minimised Player answers), and no finished processes left behind by the family switcher. The Equaliser 0.3.3, Library 0.3.1 and Analyser 0.2.2 do the same, released together. Also on `main` since: a macOS test build (`packaging/macos`, `.github/workflows/macos-test.yml`, run by hand; not part of the releases).
 - **0.2.0 released on 2026-10-15** (merged to `main` from `claude/kind-johnson-du69z8`), from the Linux Mint test of 0.1.0 (brief in `docs/briefs/2026-10-14-0.2.0.md`): opening music waits for Play unless Settings says otherwise (`--play` always plays); Add, and Shift while dropping, add to the end of the list, gaplessly if it's still playing; a dB scale under the meters (TAW-Panel 0.3.2's `meter_scale`); the meters centred with the spectrum off; media keys and the desktop's media controls (MPRIS checked with `playerctl` under PipeWire; SMTC compiles but is untested on Windows); back to start (Home); and the bottom-corner resize. Then, from two rounds of the user's feedback on the look: the nameplate is the badge and model line at the top left with no big name (TAW-Panel 0.4.0, for the whole hi-fi series), the top band is shorter, the list's keys are on the nameplate's row over the display, the list's size sits under the track's details, artwork grows up to 1000 × 1000 (the artwork column also leaves the list's keys room beside the family switcher), Simple shows only the artwork and the track's names, meter colours are a setting (Classic or Display), and the settings drawer has separated sections and a left-aligned Keys list. The corner resize was in TAW-Panel (`resize_edges`): the corners lost to the edges in egui's hit test, and after any window drag egui kept the old drag because the window manager eats the button release, so every other resize did nothing. Fixed in TAW-Panel 0.3.2 (commit `5290f15`, on TAW-Panel's `main`). The Library, Equaliser and Analyser have the same resize bug until they move to 0.3.2 or later. The Player pins TAW-Panel 0.4.0 (`d030ffd`); the panel's planned resizable list is now its 0.5.0.
 
 - **0.1.0 released on 2026-10-14**: `main` was created from branch `claude/focused-ritchie-veg4m9`, and release.yml publishes `v0.1.0` with the Linux and Windows downloads.
@@ -15,6 +16,6 @@ Written 2026-10-14 when the family's work moved from one shared chat to a chat p
 
 ## Next
 
-1. The user's test of 0.2.0, on Windows and Linux: media keys (SMTC on Windows is untested), Add while the last track plays, the corners, MP3 gapless and opening the Library's M3U8.
+1. The user's test of 0.2.x (and the friend's test of the Mac build), on Windows and Linux: media keys (SMTC on Windows is untested), Add while the last track plays, the corners, MP3 gapless and opening the Library's M3U8.
 2. 0.3.0: WASAPI exclusive mode (see ROADMAP.md's pipeline); then Now Playing and Mini layouts.
 
