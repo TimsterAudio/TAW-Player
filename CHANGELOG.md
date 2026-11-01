@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The warm finish is called Linen** (it was Spool) in Settings. It looks the same, and a saved "Spool" choice opens as Linen. From TAW-Panel 0.5.0.
+
 ## 0.2.1 – 2026-11-01
 
 - **One Player at a time, from anywhere.** Clicking the Player in another app's family switcher (or opening the Player again) brings the open one to the front, restored if it was minimised, instead of starting a second Player. Files handed over (the Library's Play key) now reach a minimised Player too.
