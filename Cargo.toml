@@ -1,6 +1,6 @@
 [package]
 name = "taw-player"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Timster's Audio Works Player (PL-001): a native, gapless music player for Windows and Linux"
 authors = ["Timster's Audio Works"]

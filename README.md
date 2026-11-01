@@ -1,6 +1,6 @@
 # TAW Player
 
-**Timster's Audio Works – Player (PL-001) v0.2.1**: a native, gapless music player for Windows and Linux, in the TAW look shared with the Library, Equaliser and Analyser (Spool or Porcelain, light or dark). It's the native successor to Spool.
+**Timster's Audio Works – Player (PL-001) v0.2.2**: a native, gapless music player for Windows and Linux, in the TAW look shared with the Library, Equaliser and Analyser (Linen or Porcelain, light or dark). It's the native successor to Spool.
 
 ![The Player playing a test album](docs/screenshot.png)
 
