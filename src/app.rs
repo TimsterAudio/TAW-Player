@@ -189,8 +189,6 @@ pub struct PlayerApp {
     devices: Vec<String>,
     message: Option<(String, f64)>,
     beacon: Option<Beacon>,
-    last_beat: f64,
-    last_inbox: f64,
     last_index: Option<usize>,
     scroll_to: Option<usize>,
     user_scrolled: f64,
@@ -244,10 +242,7 @@ impl PlayerApp {
             .and_then(|st| eframe::get_value(st, STORAGE_KEY))
             .unwrap_or_default();
         let engine = Engine::start(s.device.clone(), db_to_gain(s.volume_db));
-        let beacon = instance::data_dir().map(Beacon::new);
-        if let Some(b) = &beacon {
-            b.beat();
-        }
+        let beacon = instance::data_dir().map(|d| Beacon::start(d, cc.egui_ctx.clone()));
         let mut analyzer = Analyzer::default();
         analyzer.hop = 1024;
         analyzer.ballistics = Ballistics {
@@ -272,8 +267,6 @@ impl PlayerApp {
             devices: Vec::new(),
             message: None,
             beacon,
-            last_beat: 0.0,
-            last_inbox: 0.0,
             last_index: None,
             scroll_to: None,
             user_scrolled: -100.0,
@@ -635,20 +628,13 @@ impl PlayerApp {
             }
         }
 
-        if let Some(b) = &self.beacon {
-            if t - self.last_beat > 1.0 {
-                self.last_beat = t;
-                b.beat();
-            }
-            if t - self.last_inbox > 0.5 {
-                self.last_inbox = t;
-                let lists = b.take_inbox();
-                if let Some(h) = lists.into_iter().last() {
-                    let play = h.play || self.s.play_on_open;
-                    self.load(&h.paths, play, t);
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
-            }
+        // Hand-overs from later launches (the beacon's thread has already
+        // brought the window forward). No files: another launch just
+        // wanted this Player in front (the family switcher, a double-click).
+        let handed = self.beacon.as_ref().map(Beacon::requests);
+        if let Some(h) = handed.and_then(|v| v.into_iter().rev().find(|h| !h.paths.is_empty())) {
+            let play = h.play || self.s.play_on_open;
+            self.load(&h.paths, play, t);
         }
 
         // Files dropped on the window.

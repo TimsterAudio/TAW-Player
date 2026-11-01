@@ -1,0 +1,23 @@
+TAW Player for Mac (test build)
+===============================
+
+1. Drag "TAW Player" into your Applications folder (or anywhere you like).
+
+2. The first time, double-click it. Your Mac will say it can't check the
+   app ("Apple could not verify..."), because this test build isn't
+   registered with Apple. Click Done (not Move to Bin).
+
+3. Open System Settings > Privacy & Security, scroll down to the
+   Security section, and click "Open Anyway" next to "TAW Player was
+   blocked". Confirm with your password. (On older Macs: right-click the
+   app, choose Open, then Open again.)
+
+After that it opens normally with a double-click.
+
+Using it: open a folder of music or drop it on the window, then press
+Play (or Space). It plays FLAC, MP3, WAV, AIFF, ALAC, AAC and Ogg Vorbis,
+reads only, and never changes your files. The media keys on the keyboard
+work too.
+
+This is an early test for a friend; please say what works and what
+doesn't (and which Mac and macOS version it's on).

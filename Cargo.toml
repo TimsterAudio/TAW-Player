@@ -1,6 +1,6 @@
 [package]
 name = "taw-player"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Timster's Audio Works Player (PL-001): a native, gapless music player for Windows and Linux"
 authors = ["Timster's Audio Works"]
@@ -26,6 +26,8 @@ souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"
 [target.'cfg(windows)'.dependencies]
 # The window handle the media controls need on Windows
 raw-window-handle = "0.6"
+# AllowSetForegroundWindow: a second launch lets the open Player come to the front
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = { version = "0.18", features = ["pipewire"] }

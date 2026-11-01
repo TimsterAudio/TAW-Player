@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.1 – 2026-11-01
+
+- **One Player at a time, from anywhere.** Clicking the Player in another app's family switcher (or opening the Player again) brings the open one to the front, restored if it was minimised, instead of starting a second Player. Files handed over (the Library's Play key) now reach a minimised Player too.
+- Starting another family app no longer leaves a finished process behind each time.
+
 ## 0.2.0 – 2026-10-15
 
 From the 0.1.0 test on Linux Mint.
